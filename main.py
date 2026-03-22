@@ -63,7 +63,7 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
 
     _Q_PATTERN = _re.compile(r'^Q(\d+)[:.：、]\s*(.+)$')
     _EXIT_CMDS = {"quit", "exit"}
-    _log = _logging.getLogger("system")
+    _log = _logging.getLogger("deep_agent_project")
 
     payload = {"messages": initial_messages}
     result = None
