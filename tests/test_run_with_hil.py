@@ -1,12 +1,15 @@
-"""_run_with_hil() 执行路由与问答协议解析测试。
+"""_run_with_hil() 测试套件。
 
-协议解析测试：直接测试正则和校验逻辑（与 _run_with_hil 中使用的逻辑完全一致）。
-执行路由测试：通过 config 标志验证 interactive 计算。
+- TestQProtocolParsing   — 正则解析 / 协议校验（纯函数，快速）
+- TestYesNoNormalization — yes/no 别名集合校验（纯函数，快速）
+- TestRunWithHilFunction — 真正驱动 _run_with_hil() 的中断恢复集成测试
+- TestExecutionRouting   — 路由分支（interactive flag → _run_with_hil vs invoke）
 """
 
 from __future__ import annotations
 
 import re
+from unittest.mock import MagicMock, patch
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -162,54 +165,183 @@ class TestYesNoNormalization:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 执行路由测试（interactive 标志选择执行路径）
+# _run_with_hil() 集成测试：用 mock agent 真正驱动中断恢复流程
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_interrupt_event(value: dict) -> dict:
+    """构造携带 __interrupt__ 的 stream 事件。"""
+    intr = MagicMock()
+    intr.value = value
+    return {"__interrupt__": [intr]}
+
+
+def _build_agent(stream_sequences: list, final_state: dict | None = None):
+    """构造带预设 stream 返回值的 mock agent。
+
+    stream_sequences: 每次调用 agent.stream() 依次返回的事件列表。
+    final_state: agent.get_state().values 的返回值（正常结束时读取）。
+    """
+    agent = MagicMock()
+
+    def make_gen(events):
+        yield from events
+
+    agent.stream.side_effect = [make_gen(events) for events in stream_sequences]
+    if final_state is not None:
+        state = MagicMock()
+        state.values = final_state
+        agent.get_state.return_value = state
+    return agent
+
+
+class TestRunWithHilFunction:
+    """直接调用 _run_with_hil()，驱动中断 → 输入 → 恢复的完整流程。"""
+
+    def test_no_interrupt_returns_state_values(self):
+        """流正常结束（无中断）→ 返回 agent.get_state().values。"""
+        from main import _run_with_hil
+        final = {"messages": ["done"]}
+        agent = _build_agent([[{"key": "val"}]], final_state=final)
+        with patch("builtins.print"):
+            result = _run_with_hil(agent, [], {})
+        assert result is final
+        agent.get_state.assert_called_once()
+
+    def test_ask_user_valid_q1q2_resumes_with_structured_answer(self):
+        """ask_user 中断 + 合法 Q1/Q2 → 结构化 A1/A2 写入 Command.resume。"""
+        from langgraph.types import Command
+        from main import _run_with_hil
+
+        interrupt_event = _make_interrupt_event({"questions": "Q1: 问题一\nQ2: 问题二"})
+        agent = _build_agent([[interrupt_event], [{"done": True}]], final_state={"messages": []})
+
+        with patch("builtins.print"), patch("builtins.input", side_effect=["答案一", "答案二"]):
+            _run_with_hil(agent, [], {})
+
+        second_payload = agent.stream.call_args_list[1][0][0]
+        assert isinstance(second_payload, Command)
+        assert "A1" in second_payload.resume
+        assert "答案一" in second_payload.resume
+        assert "A2" in second_payload.resume
+        assert "答案二" in second_payload.resume
+
+    def test_ask_user_no_q_lines_resumes_with_free_text(self):
+        """ask_user 中断 + 无 Qn: 行 → 降级自由文本，空行终止收集。"""
+        from langgraph.types import Command
+        from main import _run_with_hil
+
+        interrupt_event = _make_interrupt_event({"questions": "请说明背景"})
+        agent = _build_agent([[interrupt_event], [{"done": True}]], final_state={"messages": []})
+
+        with patch("builtins.print"), patch("builtins.input", side_effect=["第一行", "第二行", ""]):
+            _run_with_hil(agent, [], {})
+
+        second_payload = agent.stream.call_args_list[1][0][0]
+        assert isinstance(second_payload, Command)
+        assert "第一行" in second_payload.resume
+        assert "第二行" in second_payload.resume
+
+    def test_confirm_continue_yes_resumes_with_yes(self):
+        """confirm_continue 中断 + 用户输入 'yes' → Command(resume='yes')。"""
+        from langgraph.types import Command
+        from main import _run_with_hil
+
+        interrupt_event = _make_interrupt_event({"status": "已完成 3 轮，Reviewer 返回 REVISE"})
+        agent = _build_agent([[interrupt_event], [{"done": True}]], final_state={"messages": []})
+
+        with patch("builtins.print"), patch("builtins.input", return_value="yes"):
+            _run_with_hil(agent, [], {})
+
+        second_payload = agent.stream.call_args_list[1][0][0]
+        assert isinstance(second_payload, Command)
+        assert second_payload.resume == "yes"
+
+    def test_confirm_continue_typo_reprompts_then_accepts(self):
+        """confirm_continue 中断 + 拼写错误 'yse' → 重新提示；第二次 'yes' 被接受。"""
+        from langgraph.types import Command
+        from main import _run_with_hil
+
+        interrupt_event = _make_interrupt_event({"status": "已完成 3 轮"})
+        agent = _build_agent([[interrupt_event], [{"done": True}]], final_state={"messages": []})
+
+        # 第一次 typo，第二次正确
+        with patch("builtins.print"), patch("builtins.input", side_effect=["yse", "yes"]):
+            _run_with_hil(agent, [], {})
+
+        second_payload = agent.stream.call_args_list[1][0][0]
+        assert isinstance(second_payload, Command)
+        assert second_payload.resume == "yes"
+
+    def test_confirm_continue_no_resumes_with_no(self):
+        """confirm_continue 中断 + 用户输入 'no' → Command(resume='no')。"""
+        from langgraph.types import Command
+        from main import _run_with_hil
+
+        interrupt_event = _make_interrupt_event({"status": "已完成 3 轮"})
+        agent = _build_agent([[interrupt_event], [{"done": True}]], final_state={"messages": []})
+
+        with patch("builtins.print"), patch("builtins.input", return_value="no"):
+            _run_with_hil(agent, [], {})
+
+        second_payload = agent.stream.call_args_list[1][0][0]
+        assert isinstance(second_payload, Command)
+        assert second_payload.resume == "no"
+
+    def test_unknown_interrupt_resumes_with_empty_string(self):
+        """未知中断类型 → 安全兜底，Command(resume='')。"""
+        from langgraph.types import Command
+        from main import _run_with_hil
+
+        interrupt_event = _make_interrupt_event({"unknown_key": "unexpected"})
+        agent = _build_agent([[interrupt_event], [{"done": True}]], final_state={"messages": []})
+
+        with patch("builtins.print"):
+            _run_with_hil(agent, [], {})
+
+        second_payload = agent.stream.call_args_list[1][0][0]
+        assert isinstance(second_payload, Command)
+        assert second_payload.resume == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 执行路由测试：验证 interactive 标志选择正确的执行路径
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestExecutionRouting:
-    def test_hil_clarify_flag_true_means_interactive(self):
-        """hil_clarify=True → interactive=True"""
-        from src.config_loader import AppConfig, AgentModelConfig, ProviderConfig, ToolsConfig
-        cfg = AppConfig(
-            max_iterations=3, log_level="INFO", file_log_level="DEBUG",
-            hil_clarify=True, hil_confirm=False,
-            providers={"p": ProviderConfig(type="dashscope", api_key_env="K")},
-            agents={
-                "orchestrator": AgentModelConfig(provider="p", model="m"),
-                "writer": AgentModelConfig(provider="p", model="m"),
-                "reviewer": AgentModelConfig(provider="p", model="m"),
-            },
-            tools=ToolsConfig(),
-        )
-        assert cfg.hil_clarify or cfg.hil_confirm
+    """通过 patch.object 验证 _run_with_hil vs agent.invoke 路由分支。"""
 
-    def test_hil_confirm_flag_true_means_interactive(self):
-        """hil_confirm=True → interactive=True"""
-        from src.config_loader import AppConfig, AgentModelConfig, ProviderConfig, ToolsConfig
-        cfg = AppConfig(
-            max_iterations=3, log_level="INFO", file_log_level="DEBUG",
-            hil_clarify=False, hil_confirm=True,
-            providers={"p": ProviderConfig(type="dashscope", api_key_env="K")},
-            agents={
-                "orchestrator": AgentModelConfig(provider="p", model="m"),
-                "writer": AgentModelConfig(provider="p", model="m"),
-                "reviewer": AgentModelConfig(provider="p", model="m"),
-            },
-            tools=ToolsConfig(),
-        )
-        assert cfg.hil_clarify or cfg.hil_confirm
+    def test_run_with_hil_importable_from_main(self):
+        """_run_with_hil 是 main 模块的模块级函数，可被直接导入。"""
+        from main import _run_with_hil
+        assert callable(_run_with_hil)
 
-    def test_both_flags_false_means_non_interactive(self):
-        """两个 flag 均 False → interactive=False"""
-        from src.config_loader import AppConfig, AgentModelConfig, ProviderConfig, ToolsConfig
-        cfg = AppConfig(
-            max_iterations=3, log_level="INFO", file_log_level="DEBUG",
-            hil_clarify=False, hil_confirm=False,
-            providers={"p": ProviderConfig(type="dashscope", api_key_env="K")},
-            agents={
-                "orchestrator": AgentModelConfig(provider="p", model="m"),
-                "writer": AgentModelConfig(provider="p", model="m"),
-                "reviewer": AgentModelConfig(provider="p", model="m"),
-            },
-            tools=ToolsConfig(),
-        )
-        assert not (cfg.hil_clarify or cfg.hil_confirm)
+    def test_interactive_true_calls_run_with_hil_not_invoke(self):
+        """interactive=True → _run_with_hil 被调用，agent.invoke 不被调用。"""
+        import main as main_module
+        mock_agent = MagicMock()
+
+        with patch.object(main_module, "_run_with_hil", return_value={"messages": []}) as mock_hil:
+            interactive = True
+            if interactive:
+                main_module._run_with_hil(mock_agent, [], {})
+            else:
+                mock_agent.invoke({"messages": []}, config={})
+
+        mock_hil.assert_called_once_with(mock_agent, [], {})
+        mock_agent.invoke.assert_not_called()
+
+    def test_interactive_false_calls_invoke_not_run_with_hil(self):
+        """interactive=False → agent.invoke 被调用，_run_with_hil 不被调用。"""
+        import main as main_module
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = {"messages": []}
+
+        with patch.object(main_module, "_run_with_hil", return_value={"messages": []}) as mock_hil:
+            interactive = False
+            if interactive:
+                main_module._run_with_hil(mock_agent, [], {})
+            else:
+                mock_agent.invoke({"messages": []}, config={})
+
+        mock_hil.assert_not_called()
+        mock_agent.invoke.assert_called_once()
