@@ -46,6 +46,138 @@ def sanitize_filename(raw: str, default: str = "design.md") -> str:
     return name
 
 
+def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
+    """执行 Agent，处理 ask_user（需求澄清）和 confirm_continue（超限确认）两类中断。
+
+    使用 agent.stream() 流式运行；遇到 __interrupt__ 事件时：
+    - "questions" key → 需求澄清：逐条收集 A1/A2/A3 或降级为自由文本
+    - "status" key   → 超限确认：收集 yes/no 决策
+    - 其他           → 安全兜底，以空字符串恢复
+
+    正常结束后通过 agent.get_state() 获取最终状态，与 invoke() 返回结构兼容。
+    """
+    import logging as _logging
+    import re as _re
+
+    from langgraph.types import Command
+
+    _Q_PATTERN = _re.compile(r'^Q(\d+)[:.：、]\s*(.+)$')
+    _EXIT_CMDS = {"quit", "exit"}
+    _log = _logging.getLogger("system")
+
+    payload = {"messages": initial_messages}
+    result = None
+
+    while True:
+        interrupted = False
+        gen = agent.stream(payload, config=thread_config)
+        try:
+            for event in gen:
+                interrupts = event.get("__interrupt__")
+                if not interrupts:
+                    continue
+
+                interrupted = True
+                interrupt_value = interrupts[0].value
+
+                # ── 第一类：需求澄清 ─────────────────────────────────────────
+                if "questions" in interrupt_value:
+                    questions = interrupt_value.get("questions", "（Agent 未提供具体问题）")
+
+                    q_matches = [
+                        (int(m.group(1)), line.strip())
+                        for line in questions.splitlines()
+                        if (m := _Q_PATTERN.match(line.strip()))
+                    ]
+                    actual_nums = [num for num, _ in q_matches]
+                    expected_nums = list(range(1, len(q_matches) + 1))
+                    protocol_valid = (
+                        2 <= len(q_matches) <= 3
+                        and actual_nums == expected_nums
+                    )
+
+                    _log.info("Agent 有需求澄清问题，请逐条回答（输入 quit 可终止程序）：")
+                    print(f"\n{'─' * 60}")
+                    print(questions)
+                    print('─' * 60)
+
+                    if protocol_valid:
+                        print("（请逐条回答，每条输入完成后按回车；输入 quit 终止）")
+                        answers = []
+                        for num, _ in q_matches:
+                            print(f"A{num}：", end="", flush=True)
+                            ans = input().strip()
+                            if ans.lower() in _EXIT_CMDS:
+                                _log.info("用户主动退出，程序终止")
+                                raise SystemExit(0)
+                            while not ans:
+                                ans = input().strip()
+                                if ans.lower() in _EXIT_CMDS:
+                                    _log.info("用户主动退出，程序终止")
+                                    raise SystemExit(0)
+                            answers.append(f"A{num}：{ans}")
+                        user_answer = "\n".join(answers)
+                    else:
+                        if len(q_matches) > 3:
+                            _log.warning("问题数量超过上限 3 个，降级为自由文本回答")
+                        elif actual_nums != expected_nums:
+                            _log.warning(
+                                "问题编号不连续或不从 1 开始（实际: %s），降级为自由文本回答",
+                                actual_nums,
+                            )
+                        lines: list[str] = []
+                        while True:
+                            line = input()
+                            if line.lower() in _EXIT_CMDS:
+                                _log.info("用户主动退出，程序终止")
+                                raise SystemExit(0)
+                            if line == "" and lines:
+                                break
+                            if line:
+                                lines.append(line)
+                        user_answer = "\n".join(lines)
+
+                    payload = Command(resume=user_answer)
+
+                # ── 第二类：超限确认 ─────────────────────────────────────────
+                elif "status" in interrupt_value:
+                    status = interrupt_value.get("status", "迭代已达上限")
+                    _log.info("迭代轮次已达上限，等待用户决策：")
+                    print(f"\n{'─' * 60}")
+                    print(f"[迭代超限] {status}")
+                    print("是否重置计数、再给约一轮完整配额继续迭代？[yes/no/quit]")
+                    print('─' * 60)
+                    while True:
+                        choice = input().strip().lower()
+                        if choice in _EXIT_CMDS:
+                            _log.info("用户主动退出，程序终止")
+                            raise SystemExit(0)
+                        if choice:
+                            break
+                        print("请输入 yes 或 no：", end="", flush=True)
+                    user_answer = "yes" if choice in ("yes", "y", "继续", "是") else "no"
+                    if user_answer == "yes":
+                        _log.info("[HIL] 用户授权继续，尽量重置计数，再给约一轮完整配额")
+                    else:
+                        _log.info("[HIL] 用户选择结束迭代，以当前版本作为最终输出")
+                    payload = Command(resume=user_answer)
+
+                # ── 未知中断类型：安全兜底 ───────────────────────────────────
+                else:
+                    _log.warning("收到未知类型的 HIL 中断，自动以空字符串恢复")
+                    payload = Command(resume="")
+
+                break  # 退出本轮 stream，用新 payload 重新进入 while
+        finally:
+            gen.close()
+
+        if not interrupted:
+            result = agent.get_state(config=thread_config).values
+            break
+
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Writer-Reviewer Agent System (deepagents SDK)",
@@ -60,6 +192,8 @@ def main() -> None:
                         help="Max iteration rounds")
     parser.add_argument("-l", "--log-level", default=None,
                         help="Log level (DEBUG/INFO/WARNING/ERROR)")
+    parser.add_argument("-i", "--interactive", action="store_true",
+                        help="开启交互模式：等效于同时将 hil_clarify 和 hil_confirm 设为 True，优先级高于配置文件")
     args = parser.parse_args()
 
     # 1. 解析 -f/-o，收集延迟告警（此时 logger 尚未初始化）
@@ -94,7 +228,7 @@ def main() -> None:
     # 4. 提前初始化日志（使用默认级别），确保配置加载阶段的错误能以统一格式输出
     from src.logger import setup_logger
 
-    logger = setup_logger("INFO")
+    logger = setup_logger("INFO", "DEBUG")
 
     # 5. 加载配置（延迟导入，确保 .env 已加载）
     from src.config_loader import ConfigError, load_config, validate_env_vars
@@ -112,9 +246,12 @@ def main() -> None:
         config.max_iterations = args.max_iterations
     if args.log_level:
         config.log_level = args.log_level
+    if args.interactive:
+        config.hil_clarify = True
+        config.hil_confirm = True
 
-    # 用配置中的最终级别重新设置控制台 handler 级别
-    logger = setup_logger(config.log_level)
+    # 用配置中的最终级别重新设置控制台和文件 handler 级别
+    logger = setup_logger(config.log_level, config.file_log_level)
     logger.info("Writer-Reviewer Agent 系统启动")
 
     for msg in deferred_warnings:
@@ -153,21 +290,23 @@ def main() -> None:
     agent, orch_middleware = create_orchestrator_agent(config, requirement_filename)
     logger.info("Agent 创建完成，开始执行...")
 
-    result = agent.invoke(
+    initial_messages = [
         {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (
-                        f"请根据需求编写技术设计文档。"
-                        f"需求文件在 /input/{requirement_filename}，"
-                        f"同目录下的其他文件为参考文件，请按需阅读。"
-                    ),
-                }
-            ],
-        },
-        config={"configurable": {"thread_id": str(uuid.uuid4())}},
-    )
+            "role": "user",
+            "content": (
+                f"请根据需求编写技术设计文档。"
+                f"需求文件在 /input/{requirement_filename}，"
+                f"同目录下的其他文件为参考文件，请按需阅读。"
+            ),
+        }
+    ]
+    thread_config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+
+    interactive = config.hil_clarify or config.hil_confirm
+    if interactive:
+        result = _run_with_hil(agent, initial_messages, thread_config)
+    else:
+        result = agent.invoke({"messages": initial_messages}, config=thread_config)
 
     # 10. 确定输出文件名（三级降级：-o > drafts/output-filename.txt > design.md）
     if output_filename_from_arg:
