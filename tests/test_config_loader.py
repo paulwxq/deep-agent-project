@@ -62,6 +62,28 @@ class TestLoadConfigHappyPath:
         assert "bigmodel" in cfg.providers
         assert "openrouter" in cfg.providers
 
+    def test_hil_flags_default_to_false(self, project_root: Path):
+        """验证默认配置文件中 hil_clarify 和 hil_confirm 都为 False。"""
+        config_path = project_root / "config" / "agents.yaml"
+        cfg = load_config(str(config_path))
+        assert cfg.hil_clarify is False, "hil_clarify 默认应为 False"
+        assert cfg.hil_confirm is False, "hil_confirm 默认应为 False"
+
+    def test_hil_flags_loaded_from_yaml(self, tmp_path: Path, project_root: Path):
+        """验证 hil_clarify / hil_confirm 能从 YAML 正确加载。"""
+        import yaml as _yaml
+        raw = _yaml.safe_load(
+            (project_root / "config" / "agents.yaml").read_text(encoding="utf-8")
+        )
+        raw["global"]["hil_clarify"] = True
+        raw["global"]["hil_confirm"] = True
+        tmp_config = tmp_path / "agents.yaml"
+        tmp_config.write_text(_yaml.dump(raw), encoding="utf-8")
+
+        cfg = load_config(str(tmp_config))
+        assert cfg.hil_clarify is True
+        assert cfg.hil_confirm is True
+
     def test_appconfig_has_no_output_dir(self, project_root: Path):
         """验证 output_dir 字段已从 AppConfig 彻底删除。"""
         config_path = project_root / "config" / "agents.yaml"
@@ -158,6 +180,33 @@ class TestLoadConfigErrors:
         with pytest.raises(ConfigError, match="缺少 'type' 字段"):
             load_config(path)
 
+    @pytest.mark.parametrize("field,value", [
+        ("hil_clarify", '"false"'),   # 带引号字符串，bool("false") 会误判为 True
+        ("hil_clarify", '"true"'),    # 带引号字符串
+        ("hil_clarify", "0"),         # 整数 0
+        ("hil_clarify", "1"),         # 整数 1
+        ("hil_confirm", '"false"'),
+        ("hil_confirm", "0"),
+    ])
+    def test_hil_flag_non_bool_type_raises(self, tmp_path: Path, field: str, value: str):
+        """hil_clarify/hil_confirm 为字符串或数字时必须报 ConfigError，不得隐式转换。"""
+        yaml_content = f"""\
+            global:
+              max_iterations: 3
+              {field}: {value}
+            providers:
+              dashscope:
+                type: dashscope
+                api_key_env: DASHSCOPE_API_KEY
+            agents:
+              orchestrator:
+                provider: dashscope
+                model: qwen3-max
+        """
+        path = write_yaml(tmp_path, yaml_content)
+        with pytest.raises(ConfigError, match="必须为布尔值"):
+            load_config(path)
+
     def test_global_section_optional(self, tmp_path: Path):
         """global 节点缺失时应使用默认值，不应报错。"""
         yaml_content = """\
@@ -173,7 +222,8 @@ class TestLoadConfigErrors:
         path = write_yaml(tmp_path, yaml_content)
         cfg = load_config(path)
         assert cfg.max_iterations == 3     # 默认值
-        assert cfg.log_level == "DEBUG"    # 默认值
+        assert cfg.log_level == "INFO"     # 默认值（已从 DEBUG 改为 INFO）
+        assert cfg.file_log_level == "DEBUG"  # 默认值
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +235,9 @@ def _make_config(providers: dict, agents: dict, tavily_enabled: bool = False) ->
     return AppConfig(
         max_iterations=3,
         log_level="INFO",
+        file_log_level="DEBUG",
+        hil_clarify=False,
+        hil_confirm=False,
         providers={
             k: ProviderConfig(**v) for k, v in providers.items()
         },

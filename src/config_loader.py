@@ -47,6 +47,9 @@ class AppConfig:
 
     max_iterations: int
     log_level: str
+    file_log_level: str
+    hil_clarify: bool
+    hil_confirm: bool
     providers: dict[str, ProviderConfig]
     agents: dict[str, AgentModelConfig]
     tools: ToolsConfig
@@ -54,6 +57,21 @@ class AppConfig:
 
 class ConfigError(Exception):
     """配置错误。"""
+
+
+def _require_bool(value: object, field_name: str) -> bool:
+    """确保 YAML 字段是原生布尔值，拒绝字符串/数字等容易误判的类型。
+
+    YAML 中不带引号的 true/false 会被 safe_load 解析为 Python bool，
+    带引号的 "true"/"false" 则是 str——直接 bool("false") 会返回 True，
+    因此必须严格校验类型而非隐式转换。
+    """
+    if not isinstance(value, bool):
+        raise ConfigError(
+            f"配置字段 '{field_name}' 必须为布尔值（YAML 原生 true/false），"
+            f"不支持字符串或数字类型（当前值: {value!r}）"
+        )
+    return value
 
 
 def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
@@ -76,7 +94,10 @@ def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
     # --- global ---
     global_cfg = raw.get("global", {})
     max_iterations = global_cfg.get("max_iterations", 3)
-    log_level = global_cfg.get("log_level", "DEBUG")
+    log_level = global_cfg.get("log_level", "INFO")
+    file_log_level = global_cfg.get("file_log_level", "DEBUG")
+    hil_clarify = _require_bool(global_cfg.get("hil_clarify", False), "hil_clarify")
+    hil_confirm = _require_bool(global_cfg.get("hil_confirm", False), "hil_confirm")
 
     # --- providers ---
     raw_providers = raw.get("providers", {})
@@ -120,6 +141,9 @@ def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
     return AppConfig(
         max_iterations=max_iterations,
         log_level=log_level,
+        file_log_level=file_log_level,
+        hil_clarify=hil_clarify,
+        hil_confirm=hil_confirm,
         providers=providers,
         agents=agents,
         tools=tools,
