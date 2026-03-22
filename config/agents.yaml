@@ -1,0 +1,69 @@
+# ========================================
+# 全局配置
+# ========================================
+global:
+  max_iterations: 3
+  log_level: "INFO"
+
+# ========================================
+# Provider 定义：声明可用的模型提供商
+# ========================================
+providers:
+  dashscope:
+    type: "dashscope"
+    api_key_env: "DASHSCOPE_API_KEY"
+    base_url_env: "DASHSCOPE_API_BASE"
+
+  minimax:
+    type: "anthropic_compatible"
+    base_url: "https://api.minimaxi.com/anthropic"
+    api_key_env: "MINIMAX_API_KEY"
+
+  bigmodel:
+    type: "openai_compatible"
+    base_url: "https://open.bigmodel.cn/api/paas/v4/"
+    api_key_env: "ZHIPUAI_API_KEY"
+
+  openrouter:
+    type: "openrouter"
+    api_key_env: "OPENROUTER_API_KEY"
+
+# ========================================
+# Agent 模型配置：每个 Agent 引用 Provider + 模型名
+# ========================================
+agents:
+  orchestrator:
+    provider: "dashscope"
+    model: "qwen3-max"
+    params:
+      temperature: 0.3
+      max_tokens: 8192
+      max_retries: 6
+      timeout: 120
+
+  writer:
+    provider: "minimax"
+    model: "MiniMax-M2.7"
+    params:
+      temperature: 0.6
+      max_tokens: 16384
+      max_retries: 6
+      timeout: 180
+
+  reviewer:
+    provider: "bigmodel"
+    model: "glm-5"
+    params:
+      temperature: 0.2
+      max_tokens: 8192
+      max_retries: 6
+      timeout: 120
+
+# ========================================
+# 工具配置
+# ========================================
+tools:
+  tavily:
+    enabled: false
+    api_key_env: "TAVILY_API_KEY"
+    max_results: 5

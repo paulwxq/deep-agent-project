@@ -1,0 +1,35 @@
+output_table,output_column,original_table,original_column,formula,script_file
+churn_out,Age,churn_raw,Age,passthrough,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,Balance,churn_raw,Balance,passthrough,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,CustomerId,churn_raw,CustomerId,passthrough,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,Exited,churn_raw,Exited,passthrough,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,Gender,churn_raw,Gender,passthrough,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,Geography,churn_raw,Geography,passthrough,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,Tenure,churn_raw,Tenure,passthrough,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,bal_per_prod,churn_raw,Balance; NumOfProducts,Balance / num_prod,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,credit_scr,churn_raw,CreditScore,rename CreditScore -> credit_scr,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,est_sal,churn_raw,EstimatedSalary,rename EstimatedSalary -> est_sal,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,num_prod,churn_raw,NumOfProducts,rename NumOfProducts -> num_prod,/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+churn_out,senior_flag,churn_raw,Age,(Age >= 60),/Users/wing/AI/py311_projects/sas/01_churn_transform.sas
+loan_out,CustomerId,loan_raw,CustomerId,passthrough,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,Employment_Duration,loan_raw,Employment_Duration,passthrough,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,Grade,loan_raw,Grade,passthrough,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,Home_Ownership,loan_raw,Home_Ownership,passthrough,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,Loan_Status,loan_raw,Loan_Status,passthrough,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,Sub_Grade,loan_raw,Sub_Grade,passthrough,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,dti,loan_raw,Debit_to_Income,rename Debit_to_Income -> dti,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,high_grade_flag,loan_raw,Grade,"(Grade in ('A', 'B'))",/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,int_rate,loan_raw,Interest_Rate,rename Interest_Rate -> int_rate,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,int_rate_pct,loan_raw,Interest_Rate,int_rate / 100,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+loan_out,loan_amt,loan_raw,Loan_Amount,rename Loan_Amount -> loan_amt,/Users/wing/AI/py311_projects/sas/02_loan_transform.sas
+merged_out,Age,churn_raw,Age,passthrough,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,Balance,churn_raw,Balance,passthrough,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,CustomerId,churn_raw; loan_raw,CustomerId,passthrough,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,Exited,churn_raw,Exited,passthrough,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,Grade,loan_raw,Grade,passthrough,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,Loan_Status,loan_raw,Loan_Status,passthrough,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,age_loan_ratio,churn_raw; loan_raw,Age; Loan_Amount,(Age / loan_amt) * 1000,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,credit_scr,churn_raw,CreditScore,rename CreditScore -> credit_scr,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,dti,loan_raw,Debit_to_Income,rename Debit_to_Income -> dti,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,loan_amt,loan_raw,Loan_Amount,rename Loan_Amount -> loan_amt,/Users/wing/AI/py311_projects/sas/03_merge_transform.sas
+merged_out,risk_score,churn_raw; loan_raw,CreditScore; Debit_to_Income,credit_scr - (dti * 10),/Users/wing/AI/py311_projects/sas/03_merge_transform.sas

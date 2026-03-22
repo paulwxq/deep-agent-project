@@ -12,3 +12,8 @@ wheels/
 .venv-win
 .env
 
+# Runtime artifacts
+drafts/
+drafts_*/
+logs/
+

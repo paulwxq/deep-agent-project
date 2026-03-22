@@ -23,7 +23,7 @@
 7. `AnthropicPromptCachingMiddleware` — Token 成本优化
 8. `PatchToolCallsMiddleware` — 修复中断的工具调用
 
-用户提供的自定义中间件会追加到这些默认中间件之后。每个中间件实现 `AgentMiddleware` 协议，包含四个钩子：`before_agent`、`wrap_model_call`、`before_tool_call` 和 `after_tool_call`。
+用户提供的自定义中间件会追加到这些默认中间件之后。每个中间件实现 `AgentMiddleware` 协议（从 `langchain.agents.middleware.types` 导入），包含六个钩子：`before_agent`、`before_model`、`after_model`、`wrap_model_call`、`wrap_tool_call` 和 `after_agent`。其中 `wrap_model_call` 和 `wrap_tool_call` 是环绕式钩子（接收 `handler` 回调），其余为前后置钩子。
 
 ---
 
