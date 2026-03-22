@@ -304,44 +304,88 @@ class TestRunWithHilFunction:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 执行路由测试：验证 interactive 标志选择正确的执行路径
+# 执行路由测试：通过真实调用 main() 验证 HIL 标志选择正确的执行路径
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestExecutionRouting:
-    """通过 patch.object 验证 _run_with_hil vs agent.invoke 路由分支。"""
+    """真实调用 main()，通过参数/配置触发路由分支，验证 _run_with_hil vs agent.invoke。
+
+    策略：
+    - monkeypatch.chdir(tmp_path) + patch("main.os.chdir") no-op
+      → 所有相对路径（input/、drafts/、output/）落到 tmp_path
+    - 延迟 import（src.logger / src.config_loader / src.agent_factory）在原始模块上 patch
+    - 模块级 import（os.chdir / load_dotenv / shutil）在 main.* 上 patch
+    """
+
+    @staticmethod
+    def _make_config(hil_clarify: bool, hil_confirm: bool):
+        from src.config_loader import AppConfig, AgentModelConfig, ProviderConfig, ToolsConfig
+        p = ProviderConfig(type="dashscope", api_key_env="K")
+        a = AgentModelConfig(provider="p", model="m")
+        return AppConfig(
+            max_iterations=3, log_level="INFO", file_log_level="DEBUG",
+            hil_clarify=hil_clarify, hil_confirm=hil_confirm,
+            providers={"p": p},
+            agents={"orchestrator": a, "writer": a, "reviewer": a},
+            tools=ToolsConfig(),
+        )
+
+    def _call_main(self, tmp_path, monkeypatch, cfg, extra_argv=None):
+        """在 tmp_path 中调用真实 main()，返回 (mock_hil, mock_agent)。"""
+        import sys
+        import main as main_module
+
+        # 最小文件结构：需求文件
+        (tmp_path / "input").mkdir()
+        (tmp_path / "input" / "req.txt").write_text("需求", encoding="utf-8")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["main.py", "-f", "req.txt"] + (extra_argv or []))
+
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = {"messages": []}
+        mock_middleware = MagicMock()
+        mock_middleware.task_counts = {}
+        mock_hil = MagicMock(return_value={"messages": []})
+
+        with (
+            patch("src.logger.setup_logger", return_value=MagicMock()),
+            patch("src.config_loader.load_config", return_value=cfg),
+            patch("src.config_loader.validate_env_vars", return_value=[]),
+            patch("src.agent_factory.create_orchestrator_agent",
+                  return_value=(mock_agent, mock_middleware)),
+            patch.object(main_module, "_run_with_hil", mock_hil),
+            patch("main.os.chdir"),      # 阻止 main() 切换到 project_root
+            patch("main.load_dotenv"),
+            patch("main.shutil"),
+        ):
+            main_module.main()
+
+        return mock_hil, mock_agent
 
     def test_run_with_hil_importable_from_main(self):
-        """_run_with_hil 是 main 模块的模块级函数，可被直接导入。"""
+        """_run_with_hil 是 main 模块级函数，可直接导入。"""
         from main import _run_with_hil
         assert callable(_run_with_hil)
 
-    def test_interactive_true_calls_run_with_hil_not_invoke(self):
-        """interactive=True → _run_with_hil 被调用，agent.invoke 不被调用。"""
-        import main as main_module
-        mock_agent = MagicMock()
-
-        with patch.object(main_module, "_run_with_hil", return_value={"messages": []}) as mock_hil:
-            interactive = True
-            if interactive:
-                main_module._run_with_hil(mock_agent, [], {})
-            else:
-                mock_agent.invoke({"messages": []}, config={})
-
-        mock_hil.assert_called_once_with(mock_agent, [], {})
+    def test_interactive_flag_routes_to_run_with_hil(self, tmp_path, monkeypatch):
+        """-i 标志 → main() 将两个 HIL flag 置 True → 调用 _run_with_hil，不调用 invoke。"""
+        # config 默认关闭，-i 会在运行时覆盖
+        cfg = self._make_config(hil_clarify=False, hil_confirm=False)
+        mock_hil, mock_agent = self._call_main(tmp_path, monkeypatch, cfg, extra_argv=["-i"])
+        mock_hil.assert_called_once()
         mock_agent.invoke.assert_not_called()
 
-    def test_interactive_false_calls_invoke_not_run_with_hil(self):
-        """interactive=False → agent.invoke 被调用，_run_with_hil 不被调用。"""
-        import main as main_module
-        mock_agent = MagicMock()
-        mock_agent.invoke.return_value = {"messages": []}
+    def test_yaml_hil_clarify_routes_to_run_with_hil(self, tmp_path, monkeypatch):
+        """YAML 设置 hil_clarify=True（不加 -i）→ main() 同样路由到 _run_with_hil。"""
+        cfg = self._make_config(hil_clarify=True, hil_confirm=False)
+        mock_hil, mock_agent = self._call_main(tmp_path, monkeypatch, cfg)
+        mock_hil.assert_called_once()
+        mock_agent.invoke.assert_not_called()
 
-        with patch.object(main_module, "_run_with_hil", return_value={"messages": []}) as mock_hil:
-            interactive = False
-            if interactive:
-                main_module._run_with_hil(mock_agent, [], {})
-            else:
-                mock_agent.invoke({"messages": []}, config={})
-
+    def test_non_interactive_routes_to_invoke(self, tmp_path, monkeypatch):
+        """两个 HIL flag 均 False，不加 -i → main() 调用 agent.invoke，不调用 _run_with_hil。"""
+        cfg = self._make_config(hil_clarify=False, hil_confirm=False)
+        mock_hil, mock_agent = self._call_main(tmp_path, monkeypatch, cfg)
         mock_hil.assert_not_called()
         mock_agent.invoke.assert_called_once()
