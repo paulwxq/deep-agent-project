@@ -17,6 +17,7 @@ from src.model_factory import create_model
 from src.prompts.orchestrator_prompt import build_orchestrator_prompt
 from src.prompts.reviewer_prompt import build_reviewer_prompt
 from src.prompts.writer_prompt import build_writer_prompt
+from src.tools.hil import ask_user, confirm_continue as confirm_continue_tool
 
 
 def create_orchestrator_agent(
@@ -53,6 +54,14 @@ def create_orchestrator_agent(
             api_key_env=config.tools.tavily_api_key_env,
         ))
 
+    # HIL 工具列表（每个工具独立按对应开关注入）
+    hil_tools: list = []
+    if config.hil_clarify:
+        hil_tools.append(ask_user)
+    if config.hil_confirm:
+        hil_tools.append(confirm_continue_tool)
+    interactive = bool(hil_tools)
+
     req_path = f"/input/{requirement_filename}"
 
     # 3. 定义子代理
@@ -86,15 +95,16 @@ def create_orchestrator_agent(
 
     # 4. 组装 Orchestrator
     orch_middleware = LoggingMiddleware(agent_name="orchestrator")
+    checkpointer_kwargs = {"checkpointer": MemorySaver()} if interactive else {}
     agent = create_deep_agent(
         model=orchestrator_model,
-        tools=[],
-        system_prompt=build_orchestrator_prompt(config.max_iterations, requirement_filename),
+        tools=hil_tools,
+        system_prompt=build_orchestrator_prompt(config.max_iterations, requirement_filename, hil_clarify=config.hil_clarify, hil_confirm=config.hil_confirm),
         subagents=[writer_subagent, reviewer_subagent],
         middleware=[orch_middleware],
         backend=FilesystemBackend(root_dir=".", virtual_mode=True),
         name="orchestrator",
-        checkpointer=MemorySaver(),
+        **checkpointer_kwargs,
     )
 
     return agent, orch_middleware
