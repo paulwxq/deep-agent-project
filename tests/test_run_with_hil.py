@@ -120,10 +120,16 @@ class TestQProtocolParsing:
 # ─────────────────────────────────────────────────────────────────────────────
 
 YES_SET = {"yes", "y", "继续", "是"}
+NO_SET = {"no", "n", "否"}
+VALID_INPUTS = YES_SET | NO_SET
 
 
 def normalize_decision(raw: str) -> str:
-    """Mirrors the normalization logic in _run_with_hil confirm_continue branch."""
+    """Mirrors the normalization logic in _run_with_hil confirm_continue branch.
+
+    Only call with inputs already validated to be in VALID_INPUTS;
+    unrecognized inputs cause re-prompt in the real loop and never reach here.
+    """
     choice = raw.strip().lower()
     return "yes" if choice in YES_SET else "no"
 
@@ -134,8 +140,14 @@ class TestYesNoNormalization:
             assert normalize_decision(variant) == "yes", f"Failed for: {variant!r}"
 
     def test_no_variants_produce_no(self):
-        for variant in ("no", "n", "结束", "否", "NO"):
+        # "结束" is NOT a valid input in the new code — removed from this list
+        for variant in ("no", "n", "否", "NO"):
             assert normalize_decision(variant) == "no", f"Failed for: {variant!r}"
+
+    def test_typo_not_in_valid_inputs(self):
+        """Typos like 'yse' must not be in VALID_INPUTS (loop re-prompts instead)."""
+        for typo in ("yse", "eys", "noo", "结束", "cancel", "ok"):
+            assert typo not in VALID_INPUTS, f"{typo!r} should not be a valid input"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

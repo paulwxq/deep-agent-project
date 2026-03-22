@@ -147,15 +147,17 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
                     print(f"[迭代超限] {status}")
                     print("是否重置计数、再给约一轮完整配额继续迭代？[yes/no/quit]")
                     print('─' * 60)
+                    _YES_INPUTS = {"yes", "y", "继续", "是"}
+                    _NO_INPUTS = {"no", "n", "否"}
                     while True:
                         choice = input().strip().lower()
                         if choice in _EXIT_CMDS:
                             _log.info("用户主动退出，程序终止")
                             raise SystemExit(0)
-                        if choice:
+                        if choice in _YES_INPUTS or choice in _NO_INPUTS:
                             break
-                        print("请输入 yes 或 no：", end="", flush=True)
-                    user_answer = "yes" if choice in ("yes", "y", "继续", "是") else "no"
+                        print("请输入 yes 或 no（输入 quit 退出）：", end="", flush=True)
+                    user_answer = "yes" if choice in _YES_INPUTS else "no"
                     if user_answer == "yes":
                         _log.info("[HIL] 用户授权继续，尽量重置计数，再给约一轮完整配额")
                     else:
