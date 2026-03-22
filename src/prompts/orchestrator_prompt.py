@@ -33,7 +33,8 @@ def build_orchestrator_prompt(
 
    收到用户回答后：
    - 将问题和回答整理为 Markdown 格式，写入 /drafts/qa-supplement.md
-   - 委派 Writer 和 Reviewer 时，告知其阅读 /drafts/qa-supplement.md（其内容与需求等效）
+   - 委派 Writer 和 Reviewer 时，告知其阅读 /drafts/qa-supplement.md——
+     其权威性高于原始需求文件，若与原始需求存在冲突，必须以 qa-supplement.md 为准
 """.format(req_path=req_path) if hil_clarify else ""
 
     # 超限确认段落（hil_confirm 开启时替换步骤 5 的行为）
