@@ -63,17 +63,28 @@ class TestQProtocolParsing:
         assert protocol_valid is False  # single question → falls back
 
     def test_q_pattern_invalid_falls_back_no_q_lines(self):
+        """无 Qn: 行 → protocol_valid=False，且 actual_nums==expected_nums（均为 []）。
+        这意味着 main.py 里 elif actual_nums != expected_nums 不会命中，
+        必须由 else 分支发出 WARNING。"""
         questions = "没有任何问题格式的文本"
         q_matches, protocol_valid = parse_questions(questions)
         assert len(q_matches) == 0
         assert protocol_valid is False
+        actual_nums = [n for n, _ in q_matches]
+        expected_nums = list(range(1, len(q_matches) + 1))
+        assert actual_nums == expected_nums  # [] == [] → elif 不会触发，需走 else
 
     def test_q_pattern_single_question_falls_back(self):
-        """只有 1 条合法 Q1: 行 → protocol_valid=False（单问题走自由文本路径）"""
+        """只有 1 条合法 Q1: 行 → protocol_valid=False，且 actual_nums==expected_nums（均为 [1]）。
+        这意味着 main.py 里 elif actual_nums != expected_nums 不会命中，
+        必须由 else 分支发出 WARNING。"""
         questions = "Q1: 这是唯一一个问题"
         q_matches, protocol_valid = parse_questions(questions)
         assert len(q_matches) == 1
         assert protocol_valid is False
+        actual_nums = [n for n, _ in q_matches]
+        expected_nums = list(range(1, len(q_matches) + 1))
+        assert actual_nums == expected_nums  # [1] == [1] → elif 不会触发，需走 else
 
     def test_q_numbering_gap_falls_back(self):
         """Q1 Q3 跳号 → protocol_valid=False"""

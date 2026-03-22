@@ -125,6 +125,12 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
                                 "问题编号不连续或不从 1 开始（实际: %s），降级为自由文本回答",
                                 actual_nums,
                             )
+                        else:
+                            # len == 0（无 Qn: 行）或 len == 1（单问题）：同样不符合协议
+                            _log.warning(
+                                "问题文本中仅发现 %d 条 Qn: 格式行（需 2-3 条），降级为自由文本回答",
+                                len(q_matches),
+                            )
                         lines: list[str] = []
                         while True:
                             line = input()
