@@ -30,27 +30,28 @@ class _AgentNameFilter(logging.Filter):
         return True
 
 
-def setup_logger(log_level: str = "DEBUG") -> logging.Logger:
+def setup_logger(log_level: str = "DEBUG", file_log_level: str = "DEBUG") -> logging.Logger:
     """初始化并返回项目根 Logger。
 
-    - 文件日志：始终 DEBUG 级别，保留完整调试线索（Agent 间对话、模型输出等）
+    - 文件日志：由 file_log_level 参数控制，默认 DEBUG 级别，保留完整调试线索
     - 控制台日志：由 log_level 参数控制（--log-level INFO 可减少控制台噪音）
     - agent_name：来自 LoggingMiddleware 的 extra 字段，未提供时显示 "system"
-    - 多次调用时 handler 不重复创建，但控制台级别会随 log_level 参数更新
+    - 多次调用时 handler 不重复创建，但控制台与文件级别会随参数更新
     """
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     console_level = getattr(logging, log_level.upper(), logging.DEBUG)
+    file_level = getattr(logging, file_log_level.upper(), logging.DEBUG)
 
     logger = logging.getLogger("deep_agent_project")
     logger.setLevel(logging.DEBUG)
 
     if logger.handlers:
-        # handler 已存在：只更新控制台级别，避免重复添加 handler
+        # handler 已存在：只更新级别，避免重复添加 handler
         for handler in logger.handlers:
-            if isinstance(handler, logging.StreamHandler) and not isinstance(
-                handler, RotatingFileHandler
-            ):
+            if isinstance(handler, RotatingFileHandler):
+                handler.setLevel(file_level)
+            elif isinstance(handler, logging.StreamHandler):
                 handler.setLevel(console_level)
         return logger
 
@@ -64,7 +65,7 @@ def setup_logger(log_level: str = "DEBUG") -> logging.Logger:
         backupCount=BACKUP_COUNT,
         encoding="utf-8",
     )
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(file_level)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 

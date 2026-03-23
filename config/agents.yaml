@@ -3,7 +3,10 @@
 # ========================================
 global:
   max_iterations: 3
-  log_level: "INFO"
+  log_level: "INFO"         # 控制台日志级别
+  file_log_level: "DEBUG"   # 文件日志级别
+  hil_clarify: true      # 开启需求澄清 HIL：Orchestrator 读完需求后可向用户提问（ask_user）
+  hil_confirm: true      # 开启超限确认 HIL：迭代达到 max_iterations 时询问用户是否继续（confirm_continue）
 
 # ========================================
 # Provider 定义：声明可用的模型提供商

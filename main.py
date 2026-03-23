@@ -46,6 +46,35 @@ def sanitize_filename(raw: str, default: str = "design.md") -> str:
     return name
 
 
+def _backup_drafts_contents(drafts_dir: Path, logger) -> Path | None:
+    """备份 drafts 工作区内容到 ./drafts/_backups/drafts_YYYYMMDD_HHMMSS。
+
+    只备份 drafts 根目录下除 `_backups` 之外的内容，历史备份目录不会被再次清理或打包。
+    返回本次创建的备份目录；若无需备份则返回 None。
+    """
+    drafts_dir.mkdir(parents=True, exist_ok=True)
+    backups_root = drafts_dir / "_backups"
+    backups_root.mkdir(parents=True, exist_ok=True)
+
+    items_to_backup = [p for p in drafts_dir.iterdir() if p.name != "_backups"]
+    if not items_to_backup:
+        return None
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = backups_root / f"drafts_{ts}"
+    suffix = 1
+    while backup_dir.exists():
+        backup_dir = backups_root / f"drafts_{ts}_{suffix}"
+        suffix += 1
+    backup_dir.mkdir(parents=True, exist_ok=False)
+
+    for item in items_to_backup:
+        shutil.move(str(item), str(backup_dir / item.name))
+
+    logger.info("已将 drafts 工作区备份到 ./%s", backup_dir.as_posix())
+    return backup_dir
+
+
 def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
     """执行 Agent，处理 ask_user（需求澄清）和 confirm_continue（超限确认）两类中断。
 
@@ -283,14 +312,10 @@ def main() -> None:
 
     logger.info("需求文件: ./input/%s", requirement_filename)
 
-    # 8. 清理上一次运行的残留状态（旧 drafts/ 按时间戳备份，方便调试对比）
+    # 8. 清理上一次运行的残留状态：
+    #    将 drafts 工作区内容备份到 ./drafts/_backups/，但保留 _backups 历史内容
     drafts_dir = Path("drafts")
-    if drafts_dir.exists() and any(drafts_dir.iterdir()):
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup = drafts_dir.parent / f"drafts_{ts}"
-        shutil.move(str(drafts_dir), str(backup))
-        logger.info("已将 drafts/ 备份为 %s", backup.name)
-    drafts_dir.mkdir(parents=True, exist_ok=True)
+    _backup_drafts_contents(drafts_dir, logger)
 
     # 9. 创建并运行 Agent
     from src.agent_factory import create_orchestrator_agent

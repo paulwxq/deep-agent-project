@@ -92,15 +92,30 @@ class LoggingMiddleware(AgentMiddleware):
             result_text[:MAX_TASK_RESULT_LOG],
             extra={"agent_name": self._agent_name},
         )
-        if len(result_text) > MAX_TASK_RESULT_LOG:
-            logger.debug(
-                "📥 [%s→%s] 返回结果（完整，%d字符）: %s",
-                target,
-                self._agent_name,
-                len(result_text),
-                result_text,
+        if target == "reviewer":
+            # Reviewer 反馈是用户最关注的信息，单独打 INFO，确保控制台可见。
+            logger.info(
+                "🔍 Reviewer 反馈: %s",
+                result_text[:MAX_TASK_RESULT_LOG],
                 extra={"agent_name": self._agent_name},
             )
+        if len(result_text) > MAX_TASK_RESULT_LOG:
+            if target == "reviewer":
+                logger.info(
+                    "🔍 Reviewer 反馈（完整，%d字符）: %s",
+                    len(result_text),
+                    result_text,
+                    extra={"agent_name": self._agent_name},
+                )
+            else:
+                logger.debug(
+                    "📥 [%s→%s] 返回结果（完整，%d字符）: %s",
+                    target,
+                    self._agent_name,
+                    len(result_text),
+                    result_text,
+                    extra={"agent_name": self._agent_name},
+                )
 
         return result
 
