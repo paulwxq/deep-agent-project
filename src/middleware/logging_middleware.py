@@ -14,6 +14,8 @@ from typing import Any
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import AIMessage
 
+from src.reasoning_compat import extract_reasoning_text
+
 logger = logging.getLogger("deep_agent_project")
 
 MAX_CONTENT_PREVIEW = 800
@@ -66,7 +68,7 @@ class LoggingMiddleware(AgentMiddleware):
         self.task_counts[target] = self.task_counts.get(target, 0) + 1
 
         logger.info(
-            "📤 [%s→%s] 委派任务 (第%d次)",
+            "📤 [%s → %s] 委派任务 (第%d次)",
             self._agent_name,
             target,
             self.task_counts[target],
@@ -74,7 +76,7 @@ class LoggingMiddleware(AgentMiddleware):
         )
         if task_message:
             logger.info(
-                "📤 [%s→%s] 任务内容: %s",
+                "📤 [%s → %s] 任务内容: %s",
                 self._agent_name,
                 target,
                 task_message[:MAX_TASK_MESSAGE_LOG],
@@ -86,7 +88,7 @@ class LoggingMiddleware(AgentMiddleware):
         result_text = _extract_task_result_text(result)
 
         logger.info(
-            "📥 [%s→%s] 返回结果: %s",
+            "📥 [%s → %s] 返回结果: %s",
             target,
             self._agent_name,
             result_text[:MAX_TASK_RESULT_LOG],
@@ -109,7 +111,7 @@ class LoggingMiddleware(AgentMiddleware):
                 )
             else:
                 logger.debug(
-                    "📥 [%s→%s] 返回结果（完整，%d字符）: %s",
+                    "📥 [%s → %s] 返回结果（完整，%d字符）: %s",
                     target,
                     self._agent_name,
                     len(result_text),
@@ -145,8 +147,7 @@ class LoggingMiddleware(AgentMiddleware):
                 )
 
         # B. 思维链 / 推理过程（Qwen-Max 等模型在 additional_kwargs 中返回）
-        kwargs = getattr(msg, "additional_kwargs", {}) or {}
-        reasoning = kwargs.get("reasoning_content") or kwargs.get("thought") or ""
+        reasoning = extract_reasoning_text(msg)
         if reasoning:
             reasoning = str(reasoning)
             if len(reasoning) <= MAX_CONTENT_PREVIEW:

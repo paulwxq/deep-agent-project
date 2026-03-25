@@ -16,16 +16,40 @@ providers:
     type: "dashscope"
     api_key_env: "DASHSCOPE_API_KEY"
     base_url_env: "DASHSCOPE_API_BASE"
+    # Qwen3-plus / Qwen3-max 可使用：
+    # thinking:
+    #   type: "enabled"
+    #   budget_tokens: 4096
+    # 或原生写法 enable_thinking / thinking_budget。
 
   minimax:
     type: "anthropic_compatible"
     base_url: "https://api.minimaxi.com/anthropic"
     api_key_env: "MINIMAX_API_KEY"
+    # MiniMax M2.7 推荐使用 Anthropic 风格 thinking：
+    # thinking:
+    #   type: "enabled"
+    #   budget_tokens: 4096
 
   bigmodel:
     type: "openai_compatible"
     base_url: "https://open.bigmodel.cn/api/paas/v4/"
     api_key_env: "ZHIPUAI_API_KEY"
+    # GLM-5 使用 OpenAI 兼容接口，thinking 开启后会返回 reasoning_content。
+
+  deepseek:
+    type: "deepseek"
+    api_key_env: "DEEPSEEK_API_KEY"
+    # deepseek-chat / deepseek-reasoner
+    # deepseek-reasoner 在官方 API 中支持 thinking + tools，
+    # 但 LangChain 官方文档仍标注 tool calling 不稳定；建议仅实验性启用。
+
+  moonshot:
+    type: "openai_compatible"
+    base_url: "https://api.moonshot.cn/v1"
+    api_key_env: "MOONSHOT_API_KEY"
+    # kimi-k2.5
+    # kimi-k2.5 默认启用 thinking；开启 thinking + tools 时必须回传 reasoning_content。
 
   openrouter:
     type: "openrouter"
@@ -33,34 +57,75 @@ providers:
 
 # ========================================
 # Agent 模型配置：每个 Agent 引用 Provider + 模型名
+# thinking 参数约定：
+# 1. openai_compatible / deepseek / anthropic_compatible 推荐统一写法：
+#      thinking:
+#        type: "enabled" | "disabled"
+#        budget_tokens: 4096   # 可选；仅部分模型生效
+# 2. dashscope 额外兼容原生写法：
+#      enable_thinking: true | false
+#      thinking_budget: 4096
+#    同时也支持上面的统一 thinking 写法，内部会自动映射。
+# 3. openai_compatible / deepseek 如启用 thinking，框架会自动保留并回传
+#    reasoning_content；也可用 preserve_reasoning: true/false 手动覆盖。
+# 4. logger.debug 现在会打印模型返回的 reasoning_content / thinking block。
 # ========================================
 agents:
   orchestrator:
     provider: "dashscope"
     model: "qwen3-max"
+    # Qwen3 系列：
+    # - 支持在 params 中设置 thinking 或 enable_thinking/thinking_budget。
+    # - 是否真正支持思考模式，取决于具体模型版本；qwen3-max 请以当前 DashScope 官方版本说明为准。
+    # 示例：
+    # thinking:
+    #   type: "enabled"
+    #   budget_tokens: 4096
     params:
+      thinking:
+        type: "disabled"
       temperature: 0.3
       max_tokens: 8192
       max_retries: 6
-      timeout: 120
+      timeout: 240
 
   writer:
-    provider: "minimax"
-    model: "MiniMax-M2.7"
+    provider: "moonshot"
+    model: "kimi-k2.5"
+    # 注意：kimi-k2.5 默认启用 thinking。
+    # 在当前 deepagents / LangChain 工具调用链路下，thinking 模式会要求保留 reasoning_content，
+    # 本项目现在已支持自动回传 reasoning_content；如果要启用，可改为：
+    # thinking:
+    #   type: "enabled"
+    #   type: "disabled"
+    #   budget_tokens: 4096
+    # 但仍建议先做真实 API smoke test。
+    # 当前配置为显式启用 thinking，以增强 Writer 的长文档组织与修订能力。
+    # 同时不要手动设置 temperature：k2.5 会根据 thinking 状态使用固定值（启用时 1.0，禁用时 0.6）。
     params:
-      temperature: 0.6
+      thinking:
+        type: "enabled"
       max_tokens: 16384
       max_retries: 6
-      timeout: 180
+      timeout: 600
 
   reviewer:
     provider: "bigmodel"
     model: "glm-5"
+    # GLM-5：
+    # - 支持统一 thinking 写法，启用后框架会自动保留并回传 reasoning_content。
+    # - 如需强制覆盖回传行为，可加 preserve_reasoning: true/false。
+    # 示例：
+    # thinking:
+    #   type: "enabled"
+    #   budget_tokens: 4096
     params:
+      thinking:
+        type: "disabled"
       temperature: 0.2
       max_tokens: 8192
       max_retries: 6
-      timeout: 120
+      timeout: 300
 
 # ========================================
 # 工具配置

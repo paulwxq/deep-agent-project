@@ -103,3 +103,25 @@ class TestCheckpointerCondition:
         create_orchestrator_agent(cfg)
         call_kwargs = mock_create_deep_agent.call_args.kwargs
         assert "checkpointer" not in call_kwargs
+
+
+def test_create_orchestrator_agent_logs_llm_config(caplog):
+    from src.agent_factory import create_orchestrator_agent
+
+    cfg = _make_config(hil_clarify=False, hil_confirm=False)
+
+    with (
+        patch("src.agent_factory.create_deep_agent") as mock_cda,
+        patch("src.agent_factory.create_model") as mock_model,
+        patch("src.agent_factory.LoggingMiddleware"),
+        patch("src.agent_factory.FilesystemBackend"),
+        patch("src.agent_factory.MemorySaver"),
+        caplog.at_level("INFO", logger="deep_agent_project"),
+    ):
+        mock_model.return_value = MagicMock()
+        mock_cda.return_value = MagicMock()
+        create_orchestrator_agent(cfg)
+
+    assert 'LLM 配置 [orchestrator]: provider=dashscope, type=dashscope, model=qwen3-max, params={}' in caplog.text
+    assert 'LLM 配置 [writer]: provider=dashscope, type=dashscope, model=qwen3-max, params={}' in caplog.text
+    assert 'LLM 配置 [reviewer]: provider=dashscope, type=dashscope, model=qwen3-max, params={}' in caplog.text

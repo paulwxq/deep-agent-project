@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import unicodedata
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 _ILLEGAL_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _WINDOWS_RESERVED = frozenset({
     "CON", "PRN", "AUX", "NUL",
     *(f"COM{i}" for i in range(1, 10)),
@@ -44,6 +46,55 @@ def sanitize_filename(raw: str, default: str = "design.md") -> str:
     if not name.lower().endswith(".md"):
         name += ".md"
     return name
+
+
+def _setup_console_readline() -> None:
+    """尽量启用 readline 行编辑能力，改善退格/左右移动的交互体验。"""
+    try:
+        import readline
+    except ImportError:
+        return
+
+    for command in (
+        "set editing-mode emacs",
+        "set bell-style none",
+        "set enable-bracketed-paste off",
+    ):
+        try:
+            readline.parse_and_bind(command)
+        except Exception:
+            # 不同平台/实现对命令支持不完全一致，失败时静默降级。
+            continue
+
+
+def _normalize_console_input(raw: str) -> str:
+    """清洗控制台输入中的转义序列、退格残留和不可见控制字符。"""
+    raw = _ANSI_ESCAPE.sub("", raw)
+
+    chars: list[str] = []
+    for ch in raw:
+        if ch in {"\b", "\x7f"}:
+            if chars:
+                chars.pop()
+            continue
+        if ch == "\r":
+            continue
+        if ch == "\t":
+            chars.append(ch)
+            continue
+        if unicodedata.category(ch).startswith("C"):
+            continue
+        chars.append(ch)
+    return "".join(chars)
+
+
+def _read_console_input(prompt: str = "", logger=None) -> str:
+    """读取并清洗一行控制台输入，尽量兼容终端退格和乱码残留。"""
+    raw = input(prompt)
+    cleaned = _normalize_console_input(raw)
+    if logger is not None and cleaned != raw:
+        logger.warning("检测到终端控制字符或退格残留，已自动清洗本次输入")
+    return cleaned
 
 
 def _backup_drafts_contents(drafts_dir: Path, logger) -> Path | None:
@@ -135,12 +186,12 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
                         answers = []
                         for num, _ in q_matches:
                             print(f"A{num}：", end="", flush=True)
-                            ans = input().strip()
+                            ans = _read_console_input(logger=_log).strip()
                             if ans.lower() in _EXIT_CMDS:
                                 _log.info("用户主动退出，程序终止")
                                 raise SystemExit(0)
                             while not ans:
-                                ans = input().strip()
+                                ans = _read_console_input(logger=_log).strip()
                                 if ans.lower() in _EXIT_CMDS:
                                     _log.info("用户主动退出，程序终止")
                                     raise SystemExit(0)
@@ -162,7 +213,7 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
                             )
                         lines: list[str] = []
                         while True:
-                            line = input()
+                            line = _read_console_input(logger=_log)
                             if line.lower() in _EXIT_CMDS:
                                 _log.info("用户主动退出，程序终止")
                                 raise SystemExit(0)
@@ -185,7 +236,7 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
                     _YES_INPUTS = {"yes", "y", "继续", "是"}
                     _NO_INPUTS = {"no", "n", "否"}
                     while True:
-                        choice = input().strip().lower()
+                        choice = _read_console_input(logger=_log).strip().lower()
                         if choice in _EXIT_CMDS:
                             _log.info("用户主动退出，程序终止")
                             raise SystemExit(0)
@@ -265,6 +316,7 @@ def main() -> None:
     # 4. 提前初始化日志（使用默认级别），确保配置加载阶段的错误能以统一格式输出
     from src.logger import setup_logger
 
+    _setup_console_readline()
     logger = setup_logger("INFO", "DEBUG")
 
     # 5. 加载配置（延迟导入，确保 .env 已加载）
@@ -317,79 +369,85 @@ def main() -> None:
     drafts_dir = Path("drafts")
     _backup_drafts_contents(drafts_dir, logger)
 
-    # 9. 创建并运行 Agent
-    from src.agent_factory import create_orchestrator_agent
+    try:
+        # 9. 创建并运行 Agent
+        from src.agent_factory import create_orchestrator_agent
 
-    agent, orch_middleware = create_orchestrator_agent(config, requirement_filename)
-    logger.info("Agent 创建完成，开始执行...")
+        agent, orch_middleware = create_orchestrator_agent(config, requirement_filename)
+        logger.info("Agent 创建完成，开始执行...")
 
-    initial_messages = [
-        {
-            "role": "user",
-            "content": (
-                f"请根据需求编写技术设计文档。"
-                f"需求文件在 /input/{requirement_filename}，"
-                f"同目录下的其他文件为参考文件，请按需阅读。"
-            ),
-        }
-    ]
-    thread_config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+        initial_messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"请根据需求编写技术设计文档。"
+                    f"需求文件在 /input/{requirement_filename}，"
+                    f"同目录下的其他文件为参考文件，请按需阅读。"
+                ),
+            }
+        ]
+        thread_config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
-    interactive = config.hil_clarify or config.hil_confirm
-    if interactive:
-        result = _run_with_hil(agent, initial_messages, thread_config)
-    else:
-        result = agent.invoke({"messages": initial_messages}, config=thread_config)
-
-    # 10. 确定输出文件名（三级降级：-o > drafts/output-filename.txt > design.md）
-    if output_filename_from_arg:
-        output_filename = sanitize_filename(output_filename_from_arg)
-        if output_filename != output_filename_from_arg:
-            logger.warning("输出文件名已清洗: %s -> %s", output_filename_from_arg, output_filename)
-    else:
-        suggested_path = Path("drafts/output-filename.txt")
-        if suggested_path.exists():
-            raw_suggested = suggested_path.read_text(encoding="utf-8")
-            output_filename = sanitize_filename(raw_suggested)
-            if output_filename != raw_suggested.strip():
-                logger.warning("LLM 建议的文件名已清洗: %s -> %s", repr(raw_suggested.strip()), output_filename)
-            logger.info("最终采用输出文件名: %s", output_filename)
+        interactive = config.hil_clarify or config.hil_confirm
+        if interactive:
+            result = _run_with_hil(agent, initial_messages, thread_config)
         else:
-            output_filename = "design.md"
+            result = agent.invoke({"messages": initial_messages}, config=thread_config)
 
-    # 11. 复制最终产物到 ./output/
-    output_dir = Path("output")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    drafts_path = Path("drafts/design.md")
+        # 10. 确定输出文件名（三级降级：-o > drafts/output-filename.txt > design.md）
+        if output_filename_from_arg:
+            output_filename = sanitize_filename(output_filename_from_arg)
+            if output_filename != output_filename_from_arg:
+                logger.warning("输出文件名已清洗: %s -> %s", output_filename_from_arg, output_filename)
+        else:
+            suggested_path = Path("drafts/output-filename.txt")
+            if suggested_path.exists():
+                raw_suggested = suggested_path.read_text(encoding="utf-8")
+                output_filename = sanitize_filename(raw_suggested)
+                if output_filename != raw_suggested.strip():
+                    logger.warning("LLM 建议的文件名已清洗: %s -> %s", repr(raw_suggested.strip()), output_filename)
+                logger.info("最终采用输出文件名: %s", output_filename)
+            else:
+                output_filename = "design.md"
 
-    if drafts_path.exists():
-        final_output_path = output_dir / output_filename
-        shutil.copy2(drafts_path, final_output_path)
-        logger.info("最终文档已输出到 ./output/%s", output_filename)
-    else:
-        logger.error("Agent 运行完成但未找到 drafts/design.md，请检查 Writer 是否正常执行")
+        # 11. 复制最终产物到 ./output/
+        output_dir = Path("output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        drafts_path = Path("drafts/design.md")
 
-    # 12. 程序级统计（由中间件精确计数，不依赖 LLM 自述）
-    counts = orch_middleware.task_counts
-    total_tasks = sum(counts.values())
-    if counts:
-        stats_parts = [f"{k}x{v}" for k, v in sorted(counts.items())]
-        logger.info("执行统计: 共 %d 次子代理委派 (%s)", total_tasks, ", ".join(stats_parts))
+        if drafts_path.exists():
+            final_output_path = output_dir / output_filename
+            shutil.copy2(drafts_path, final_output_path)
+            logger.info("最终文档已输出到 ./output/%s", output_filename)
+        else:
+            logger.error("Agent 运行完成但未找到 drafts/design.md，请检查 Writer 是否正常执行")
 
-    # 13. Agent 的迭代摘要
-    # 从后向前找第一条有实质文本内容的 AIMessage，跳过 ToolMessage（工具回执）
-    final_message = ""
-    if result and result.get("messages"):
-        for msg in reversed(result["messages"]):
-            if getattr(msg, "type", "") == "ai":
-                content = msg.content if hasattr(msg, "content") else ""
-                if isinstance(content, str) and content.strip():
-                    final_message = content
-                    break
-    if final_message:
-        logger.info("迭代摘要:\n%s", final_message)
-    else:
-        logger.warning("未找到 Orchestrator 的文本摘要（最后一条消息可能是工具回执）")
+        # 12. 程序级统计（由中间件精确计数，不依赖 LLM 自述）
+        counts = orch_middleware.task_counts
+        total_tasks = sum(counts.values())
+        if counts:
+            stats_parts = [f"{k}x{v}" for k, v in sorted(counts.items())]
+            logger.info("执行统计: 共 %d 次子代理委派 (%s)", total_tasks, ", ".join(stats_parts))
+
+        # 13. Agent 的迭代摘要
+        # 从后向前找第一条有实质文本内容的 AIMessage，跳过 ToolMessage（工具回执）
+        final_message = ""
+        if result and result.get("messages"):
+            for msg in reversed(result["messages"]):
+                if getattr(msg, "type", "") == "ai":
+                    content = msg.content if hasattr(msg, "content") else ""
+                    if isinstance(content, str) and content.strip():
+                        final_message = content
+                        break
+        if final_message:
+            logger.info("迭代摘要:\n%s", final_message)
+        else:
+            logger.warning("未找到 Orchestrator 的文本摘要（最后一条消息可能是工具回执）")
+    except SystemExit:
+        raise
+    except Exception:
+        logger.exception("Agent 执行失败，请检查上方 traceback 以及 provider 超时/参数配置")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import json
+import logging
+
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langgraph.checkpoint.memory import MemorySaver
@@ -19,6 +22,24 @@ from src.prompts.reviewer_prompt import build_reviewer_prompt
 from src.prompts.writer_prompt import build_writer_prompt
 from src.tools.hil import ask_user, confirm_continue as confirm_continue_tool
 
+logger = logging.getLogger("deep_agent_project")
+
+
+def _log_agent_model_config(config: AppConfig, agent_name: str) -> None:
+    """记录 Agent 的模型配置，便于排查 provider / model / thinking 参数问题。"""
+    agent_cfg = config.agents[agent_name]
+    provider_cfg = config.providers[agent_cfg.provider]
+    params_text = json.dumps(agent_cfg.params, ensure_ascii=False, sort_keys=True)
+    logger.info(
+        "LLM 配置 [%s]: provider=%s, type=%s, model=%s, params=%s",
+        agent_name,
+        agent_cfg.provider,
+        provider_cfg.type,
+        agent_cfg.model,
+        params_text,
+        extra={"agent_name": "system"},
+    )
+
 
 def create_orchestrator_agent(
     config: AppConfig,
@@ -30,6 +51,10 @@ def create_orchestrator_agent(
         (agent, orch_middleware) — agent 图实例与 Orchestrator 的日志中间件。
         调用方可通过 orch_middleware.task_counts 获取子代理委派统计。
     """
+    _log_agent_model_config(config, "orchestrator")
+    _log_agent_model_config(config, "writer")
+    _log_agent_model_config(config, "reviewer")
+
     # 1. 通过模型工厂创建各 Agent 的模型实例
     orchestrator_model = create_model(
         config.providers[config.agents["orchestrator"].provider],

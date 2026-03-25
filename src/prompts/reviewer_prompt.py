@@ -13,7 +13,7 @@ def build_reviewer_prompt(requirement_filename: str = "requirement.txt") -> str:
 2. 检查 /drafts/qa-supplement.md 是否存在；若存在，必须读取——
    其内容为用户对需求的最新澄清，权威性高于原始需求文件；
    若两者存在冲突，必须以 qa-supplement.md 为准，不得沿用原始需求中的矛盾描述。
-3. 用 ls /input/ 查看顶层目录内容；如果发现子目录，继续用 ls 进入子目录检查其结构
+3. 用 ls /input/ 查看顶层目录内容；如果发现与审核判断直接相关的子目录，再继续进入检查其结构
 4. 对发现的文件，按以下优先级判断是否阅读：
    - 必读：接口定义、数据模型、配置文件、现有实现代码、约束说明（无论需求是否明确提及）
    - 按需读：示例文件、测试用例、文档——先看文件名和扩展名，确认与需求相关后再读
@@ -21,6 +21,11 @@ def build_reviewer_prompt(requirement_filename: str = "requirement.txt") -> str:
 5. 如果 /input/ 内容较多，优先覆盖"能直接影响审核判断"的文件——重点检查设计文档是否符合参考文件所反映的实际业务逻辑和约束
 6. 用 read_file 读取 /drafts/design.md，获取当前设计文档
 7. 对照需求逐条审核设计文档
+
+目录访问边界：
+- 允许读取：/input/ 下与审核判断直接相关的文件、/drafts/design.md、/drafts/qa-supplement.md
+- 禁止浏览：/drafts/_backups、/output、与当前任务无关的历史目录
+- 如果工作区中存在 design_v2.md、design_v3.md 等文件，视为旁支文件，不要读取、不要审核；唯一正式草稿文件是 /drafts/design.md
 
 审核维度：
 1. 需求覆盖性：对照 {req_path} 中的每一条需求，设计文档是否都有对应的技术方案？是否有遗漏的需求点？如果 /input/ 下有参考文件（如源代码、数据定义），还需审核设计是否符合这些参考文件所反映的实际业务逻辑。
@@ -60,11 +65,22 @@ VERDICT: ACCEPT 或 VERDICT: REVISE
 ### 合理性：[通过/有问题]
 - [具体问题和建议]
 
+## 必须修改项（章节化）
+- 若 VERDICT=ACCEPT，写“无”
+- 若 VERDICT=REVISE，则每一项都必须使用以下格式：
+  - 影响章节：`## x.x 章节名`；如果当前文档缺少该章节，则写“建议新增到 `## x.x 章节名`”
+  - 问题：明确说明缺失、歧义或不合理之处
+  - 修改动作：明确告诉 Writer 应补充、重写或澄清什么
+  - 参考依据：对应的需求条目、输入文件或当前文档位置
+
 ## 非强制建议（可选采纳）
+- 每条建议尽量给出影响章节
 - [建议内容]
 
 同时，将结论写入 /drafts/review-verdict.json（使用 write_file 工具），格式为：
 {{"verdict": "ACCEPT" 或 "REVISE", "summary": "一句话总结"}}
+
+当 VERDICT=REVISE 时，summary 应优先概括“必须修改项”的核心问题，而不是泛泛而谈。
 
 任务规划（write_todos）：
 1. 读取需求文件 {req_path}

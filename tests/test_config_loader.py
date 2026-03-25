@@ -60,14 +60,16 @@ class TestLoadConfigHappyPath:
         assert "dashscope" in cfg.providers
         assert "minimax" in cfg.providers
         assert "bigmodel" in cfg.providers
+        assert "deepseek" in cfg.providers
+        assert "moonshot" in cfg.providers
         assert "openrouter" in cfg.providers
 
-    def test_hil_flags_default_to_false(self, project_root: Path):
-        """验证默认配置文件中 hil_clarify 和 hil_confirm 都为 False。"""
+    def test_hil_flags_default_to_true(self, project_root: Path):
+        """验证默认配置文件中 hil_clarify 和 hil_confirm 都为 True。"""
         config_path = project_root / "config" / "agents.yaml"
         cfg = load_config(str(config_path))
-        assert cfg.hil_clarify is False, "hil_clarify 默认应为 False"
-        assert cfg.hil_confirm is False, "hil_confirm 默认应为 False"
+        assert cfg.hil_clarify is True, "hil_clarify 默认应为 True"
+        assert cfg.hil_confirm is True, "hil_confirm 默认应为 True"
 
     def test_hil_flags_loaded_from_yaml(self, tmp_path: Path, project_root: Path):
         """验证 hil_clarify / hil_confirm 能从 YAML 正确加载。"""
@@ -112,11 +114,11 @@ class TestLoadConfigHappyPath:
                 f"未在 providers 中定义"
             )
 
-    def test_writer_provider_is_minimax(self, project_root: Path):
-        """验证 writer 的 provider 是 minimax（而非旧的 anthropic_compatible）。"""
+    def test_writer_provider_is_moonshot(self, project_root: Path):
+        """验证 writer 的 provider 是 moonshot。"""
         config_path = project_root / "config" / "agents.yaml"
         cfg = load_config(str(config_path))
-        assert cfg.agents["writer"].provider == "minimax"
+        assert cfg.agents["writer"].provider == "moonshot"
 
     def test_reviewer_provider_is_bigmodel(self, project_root: Path):
         """验证 reviewer 的 provider 是 bigmodel（而非旧的 openai_compatible）。"""
@@ -284,6 +286,30 @@ class TestValidateEnvVars:
         )
         missing = validate_env_vars(cfg)
         assert "MY_BASE_URL" in missing
+
+    def test_missing_deepseek_api_key_returned(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        cfg = _make_config(
+            providers={"deepseek": {"type": "deepseek", "api_key_env": "DEEPSEEK_API_KEY"}},
+            agents={"orchestrator": {"provider": "deepseek", "model": "deepseek-chat"}},
+        )
+        missing = validate_env_vars(cfg)
+        assert "DEEPSEEK_API_KEY" in missing
+
+    def test_missing_moonshot_api_key_returned(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+        cfg = _make_config(
+            providers={
+                "moonshot": {
+                    "type": "openai_compatible",
+                    "api_key_env": "MOONSHOT_API_KEY",
+                    "base_url": "https://api.moonshot.cn/v1",
+                }
+            },
+            agents={"writer": {"provider": "moonshot", "model": "kimi-k2.5"}},
+        )
+        missing = validate_env_vars(cfg)
+        assert "MOONSHOT_API_KEY" in missing
 
     def test_tavily_key_missing_when_enabled(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("MY_API_KEY", "sk-test")

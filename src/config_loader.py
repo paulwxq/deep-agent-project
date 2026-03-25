@@ -17,7 +17,7 @@ import yaml
 class ProviderConfig:
     """模型提供商配置。"""
 
-    type: str  # "dashscope" | "anthropic_compatible" | "openai_compatible" | "openrouter"
+    type: str  # "dashscope" | "anthropic_compatible" | "openai_compatible" | "deepseek" | "openrouter"
     api_key_env: str
     base_url: str | None = None
     base_url_env: str | None = None

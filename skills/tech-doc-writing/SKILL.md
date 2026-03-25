@@ -51,3 +51,24 @@ tags: [writing, technical-document, design]
 2. **面向 Coder**：读者是开发工程师，文档应能直接指导编码
 3. **可验证性**：每个功能点应能通过文档推导出对应的测试用例
 4. **无歧义**：避免"可以考虑"、"建议选择A或B"等模糊表述
+
+## 修订模式
+
+当任务是根据 Reviewer 反馈修订技术设计文档时，必须进入修订模式：
+
+1. 先读取当前正式草稿 `/drafts/design.md`
+2. 先将 Reviewer 反馈归类到具体章节，再开始修改
+3. 默认不要重新全量扫描 `/input/`
+4. 优先使用 `edit_file` 修改受影响章节
+5. 仅当文档不存在、结构需要整体重构、或 `edit_file` 无法稳定定位时，才允许整份 `write_file`
+
+### 单文件规则
+
+- 唯一正式草稿文件是 `/drafts/design.md`
+- 不要创建 `design_v2.md`、`design_v3.md`、`design_final.md` 等变体文件
+- 如果工作区中已经存在 `design_v*.md`，视为旁支文件，不要读取、不要继续写入
+
+### 目录访问边界
+
+- 允许读取：`/input/` 下与当前任务直接相关的文件、`/drafts/design.md`、`/drafts/qa-supplement.md`
+- 禁止浏览：`/drafts/_backups`、`/output`、与当前任务无关的历史目录

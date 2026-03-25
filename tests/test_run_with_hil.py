@@ -148,6 +148,38 @@ def normalize_decision(raw: str) -> str:
     return "yes" if choice in YES_SET else "no"
 
 
+class TestConsoleInputNormalization:
+    def test_strips_ansi_escape_sequences(self):
+        from main import _normalize_console_input
+
+        raw = "abc\x1b[D\x1b[Cdef"
+        assert _normalize_console_input(raw) == "abcdef"
+
+    def test_applies_backspace_and_delete(self):
+        from main import _normalize_console_input
+
+        raw = "abcz\b\x7fde"
+        assert _normalize_console_input(raw) == "abde"
+
+    def test_run_with_hil_uses_cleaned_answer(self):
+        from langgraph.types import Command
+        from main import _run_with_hil
+
+        interrupt_event = _make_interrupt_event({"questions": "Q1: 问题一\nQ2: 问题二"})
+        agent = _build_agent([[interrupt_event], [{"done": True}]], final_state={"messages": []})
+
+        with patch("builtins.print"), patch(
+            "builtins.input",
+            side_effect=["答复\x1b[D\x1b[C", "第二个\b案"],
+        ):
+            _run_with_hil(agent, [], {})
+
+        second_payload = agent.stream.call_args_list[1][0][0]
+        assert isinstance(second_payload, Command)
+        assert "A1：答复" in second_payload.resume
+        assert "A2：第二案" in second_payload.resume
+
+
 class TestYesNoNormalization:
     def test_yes_variants_accepted(self):
         for variant in ("yes", "y", "继续", "是", "YES", "Y"):
@@ -389,3 +421,40 @@ class TestExecutionRouting:
         mock_hil, mock_agent = self._call_main(tmp_path, monkeypatch, cfg)
         mock_hil.assert_not_called()
         mock_agent.invoke.assert_called_once()
+
+    def test_main_logs_exception_and_exits_when_agent_execution_fails(self, tmp_path, monkeypatch):
+        import sys
+        import main as main_module
+
+        (tmp_path / "input").mkdir()
+        (tmp_path / "input" / "req.txt").write_text("需求", encoding="utf-8")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["main.py", "-f", "req.txt"])
+
+        cfg = self._make_config(hil_clarify=False, hil_confirm=False)
+        mock_logger = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.invoke.side_effect = RuntimeError("request timeout")
+        mock_middleware = MagicMock()
+        mock_middleware.task_counts = {}
+
+        with (
+            patch("src.logger.setup_logger", return_value=mock_logger),
+            patch("src.config_loader.load_config", return_value=cfg),
+            patch("src.config_loader.validate_env_vars", return_value=[]),
+            patch("src.agent_factory.create_orchestrator_agent",
+                  return_value=(mock_agent, mock_middleware)),
+            patch("main.os.chdir"),
+            patch("main.load_dotenv"),
+            patch("main.shutil"),
+            patch.object(main_module, "_run_with_hil", MagicMock()),
+        ):
+            with patch("sys.exit", side_effect=SystemExit(1)) as mock_exit:
+                try:
+                    main_module.main()
+                except SystemExit:
+                    pass
+
+        mock_logger.exception.assert_called_once()
+        mock_exit.assert_called_once_with(1)
