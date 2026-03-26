@@ -15,6 +15,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import AIMessage
 
 from src.reasoning_compat import extract_reasoning_text
+from src import rich_console
 
 logger = logging.getLogger("deep_agent_project")
 
@@ -87,6 +88,9 @@ class LoggingMiddleware(AgentMiddleware):
                 task_message[:MAX_TASK_MESSAGE_LOG],
                 extra={"agent_name": self._agent_name},
             )
+            rich_console.print_task_delegation(
+                self._agent_name, target, self.task_counts[target], task_message
+            )
 
         result = handler(request)
 
@@ -100,12 +104,14 @@ class LoggingMiddleware(AgentMiddleware):
             extra={"agent_name": self._agent_name},
         )
         if target == "reviewer":
-            # Reviewer 反馈是用户最关注的信息，单独打 INFO，确保控制台可见。
             logger.info(
                 "🔍 Reviewer 反馈: %s",
                 result_text[:MAX_TASK_RESULT_LOG],
                 extra={"agent_name": self._agent_name},
             )
+            rich_console.print_reviewer_feedback(result_text)
+        else:
+            rich_console.print_task_result(target, self._agent_name, result_text)
         if len(result_text) > MAX_TASK_RESULT_LOG:
             if target == "reviewer":
                 logger.info(

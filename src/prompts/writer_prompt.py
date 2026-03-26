@@ -3,8 +3,33 @@
 from __future__ import annotations
 
 
-def build_writer_prompt(requirement_filename: str = "requirement.txt") -> str:
+def build_writer_prompt(
+    requirement_filename: str = "requirement.txt",
+    hil_clarify: bool = False,
+) -> str:
     req_path = f"/input/{requirement_filename}"
+
+    hil_clarify_section = """
+需求澄清（ask_user 工具可用时执行，仅适用于初稿模式）：
+完成输入目录勘查后、开始撰写前，判断是否存在以下任一情况，若存在则调用 ask_user 提问：
+
+必须提问的情况：
+a) 参考文件与需求存在明确冲突——例如需求说"A 表只有 3 个字段"但代码显示有 7 个字段；
+   此时必须问用户"以哪个为准"，不得自行假设
+b) 功能边界不清：无法判断该做 A 还是 B，且两者的设计差异显著
+c) 关键约束缺失：缺少直接影响架构决策的信息（性能要求、数据量级、集成目标等）
+
+可跳过的情况：
+- 参考文件与需求一致，或差异属于实现细节不影响设计方向
+- 需求已足够清晰，没有上述任何一种情况
+
+提问规则：最多 3 个问题，合并为一次 ask_user 调用。只问真正影响设计方向的问题。
+
+收到用户回答后：
+- 将问题和回答整理为 Markdown 格式，写入 /drafts/qa-supplement.md
+- 后续撰写以 qa-supplement.md 中的澄清为准；若与原始需求冲突，以 qa-supplement.md 为准
+""" if hil_clarify else ""
+
     return f"""\
 你是一位资深的技术架构师和技术文档撰写者。你的目标是根据业务需求编写能够直接指导代码开发的技术设计文档。
 
@@ -23,7 +48,8 @@ def build_writer_prompt(requirement_filename: str = "requirement.txt") -> str:
    其内容为用户对需求的最新澄清，权威性高于原始需求文件；
    若两者存在冲突，必须以 qa-supplement.md 为准，不得沿用原始需求中的矛盾描述。
 5. 如果 /input/ 内容较多，优先覆盖"能直接影响设计决策"的文件，避免因全量阅读而偏离写作主线
-6. 勘查完成后再开始撰写设计文档
+6. 勘查完成后，若 ask_user 工具可用，按下方"需求澄清"规则判断是否需要提问；确认无需提问或已完成提问后再开始撰写
+{hil_clarify_section}
 
 修订模式规则：
 1. 必须先读取 Reviewer 原始反馈、/drafts/design.md，以及主需求文件 {req_path} 作为修订基线；若存在 /drafts/qa-supplement.md，也必须读取，并以其为冲突澄清基线——上述读取属于需求基线建立，不属于应被削减的目录勘查

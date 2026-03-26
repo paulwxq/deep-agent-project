@@ -60,7 +60,7 @@ def _log_agent_model_config(config: AppConfig, agent_name: str) -> None:
     agent_cfg = config.agents[agent_name]
     provider_cfg = config.providers[agent_cfg.provider]
     params_text = json.dumps(agent_cfg.params, ensure_ascii=False, sort_keys=True)
-    logger.info(
+    logger.debug(
         "LLM 配置 [%s]: provider=%s, type=%s, model=%s, params=%s",
         agent_name,
         agent_cfg.provider,
@@ -109,13 +109,17 @@ def create_orchestrator_agent(
             api_key_env=config.tools.tavily_api_key_env,
         ))
 
-    # HIL 工具列表（每个工具独立按对应开关注入）
+    # Orchestrator 的 HIL 工具（仅 confirm_continue；ask_user 由 Writer 直接调用）
     hil_tools: list = []
-    if config.hil_clarify:
-        hil_tools.append(ask_user)
     if config.hil_confirm:
         hil_tools.append(confirm_continue_tool)
-    interactive = bool(hil_tools)
+    # Writer 调用 ask_user 也需要 checkpointer，只要 hil_clarify 开启图就必须是交互式的
+    interactive = config.hil_clarify or bool(hil_tools)
+
+    # Writer 工具（含 ask_user，若 hil_clarify 开启）
+    writer_tools = list(tools)
+    if config.hil_clarify:
+        writer_tools.append(ask_user)
 
     req_path = f"/input/{requirement_filename}"
 
@@ -127,8 +131,8 @@ def create_orchestrator_agent(
             f"需求文件在 {req_path}，同目录下其他文件为参考文件。"
             "草稿保存到 /drafts/design.md。接受反馈后修订文档。"
         ),
-        "system_prompt": build_writer_prompt(requirement_filename),
-        "tools": tools,
+        "system_prompt": build_writer_prompt(requirement_filename, hil_clarify=config.hil_clarify),
+        "tools": writer_tools,
         "model": writer_model,
         "skills": ["/skills/writer/"],
         "middleware": [LoggingMiddleware(agent_name="writer")],
@@ -157,7 +161,7 @@ def create_orchestrator_agent(
     agent = create_deep_agent(
         model=orchestrator_model,
         tools=hil_tools,
-        system_prompt=build_orchestrator_prompt(config.max_iterations, requirement_filename, hil_clarify=config.hil_clarify, hil_confirm=config.hil_confirm),
+        system_prompt=build_orchestrator_prompt(config.max_iterations, requirement_filename, hil_confirm=config.hil_confirm),
         subagents=[writer_subagent, reviewer_subagent],
         middleware=[orch_middleware],
         backend=FilesystemBackend(root_dir=".", virtual_mode=True),

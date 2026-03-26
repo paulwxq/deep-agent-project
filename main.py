@@ -17,6 +17,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from src.rich_console import (
+    console,
+    print_ask_user,
+    print_confirm_continue,
+    print_final_summary,
+    print_startup,
+    print_system,
+)
+
 _ILLEGAL_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _WINDOWS_RESERVED = frozenset({
@@ -104,7 +113,7 @@ def _read_console_input(prompt: str = "", logger=None) -> str:
     return cleaned
 
 
-def _backup_drafts_contents(drafts_dir: Path, logger) -> Path | None:
+def _backup_drafts_contents(drafts_dir: Path) -> Path | None:
     """备份 drafts 工作区内容到 ./drafts/_backups/drafts_YYYYMMDD_HHMMSS。
 
     只备份 drafts 根目录下除 `_backups` 之外的内容，历史备份目录不会被再次清理或打包。
@@ -129,7 +138,7 @@ def _backup_drafts_contents(drafts_dir: Path, logger) -> Path | None:
     for item in items_to_backup:
         shutil.move(str(item), str(backup_dir / item.name))
 
-    logger.info("已将 drafts 工作区备份到 ./%s", backup_dir.as_posix())
+    print_system(f"drafts 工作区已备份到 ./{backup_dir.as_posix()}")
     return backup_dir
 
 
@@ -183,13 +192,10 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
                         and actual_nums == expected_nums
                     )
 
-                    _log.info("Agent 有需求澄清问题，请逐条回答（输入 quit 可终止程序）：")
-                    print(f"\n{'─' * 60}")
-                    print(questions)
-                    print('─' * 60)
+                    print_ask_user(questions)
 
                     if protocol_valid:
-                        print("（请逐条回答，每条输入完成后按回车；输入 quit 终止）")
+                        console.print("  [dim]（请逐条回答，每条输入完成后按回车；输入 quit 终止）[/dim]")
                         answers = []
                         for num, _ in q_matches:
                             print(f"A{num}：", end="", flush=True)
@@ -235,11 +241,7 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
                 # ── 第二类：超限确认 ─────────────────────────────────────────
                 elif "status" in interrupt_value:
                     status = interrupt_value.get("status", "迭代已达上限")
-                    _log.info("迭代轮次已达上限，等待用户决策：")
-                    print(f"\n{'─' * 60}")
-                    print(f"[迭代超限] {status}")
-                    print("是否重置计数、再给约一轮完整配额继续迭代？[yes/no/quit]")
-                    print('─' * 60)
+                    print_confirm_continue(status)
                     _YES_INPUTS = {"yes", "y", "继续", "是"}
                     _NO_INPUTS = {"no", "n", "否"}
                     while True:
@@ -252,9 +254,9 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
                         print("请输入 yes 或 no（输入 quit 退出）：", end="", flush=True)
                     user_answer = "yes" if choice in _YES_INPUTS else "no"
                     if user_answer == "yes":
-                        _log.info("[HIL] 用户授权继续，尽量重置计数，再给约一轮完整配额")
+                        print_system("用户授权继续，再给约一轮完整配额")
                     else:
-                        _log.info("[HIL] 用户选择结束迭代，以当前版本作为最终输出")
+                        print_system("用户选择结束迭代，以当前版本作为最终输出")
                     payload = Command(resume=user_answer)
 
                 # ── 未知中断类型：安全兜底 ───────────────────────────────────
@@ -324,7 +326,7 @@ def main() -> None:
     from src.logger import setup_logger
 
     _setup_console_readline()
-    logger = setup_logger("INFO", "DEBUG")
+    logger = setup_logger("WARNING", "DEBUG")
 
     # 5. 加载配置（延迟导入，确保 .env 已加载）
     from src.config_loader import ConfigError, load_config, validate_env_vars
@@ -346,9 +348,8 @@ def main() -> None:
         config.hil_clarify = True
         config.hil_confirm = True
 
-    # 用配置中的最终级别重新设置控制台和文件 handler 级别
-    logger = setup_logger(config.log_level, config.file_log_level)
-    logger.info("Writer-Reviewer Agent 系统启动")
+    # 用配置中的最终级别重新设置文件 handler 级别；控制台固定 WARNING，由 rich 接管显示
+    logger = setup_logger("WARNING", config.file_log_level)
 
     for msg in deferred_warnings:
         logger.warning(msg)
@@ -369,19 +370,19 @@ def main() -> None:
         logger.error("./input/%s 存在但不是文件（可能是目录），-f 只接受文件名", requirement_filename)
         sys.exit(1)
 
-    logger.info("需求文件: ./input/%s", requirement_filename)
+    print_startup(requirement_filename)
 
     # 8. 清理上一次运行的残留状态：
     #    将 drafts 工作区内容备份到 ./drafts/_backups/，但保留 _backups 历史内容
     drafts_dir = Path("drafts")
-    _backup_drafts_contents(drafts_dir, logger)
+    _backup_drafts_contents(drafts_dir)
 
     try:
         # 9. 创建并运行 Agent
         from src.agent_factory import create_orchestrator_agent
 
         agent, orch_middleware = create_orchestrator_agent(config, requirement_filename)
-        logger.info("Agent 创建完成，开始执行...")
+        print_system("Agent 创建完成，开始执行…")
 
         initial_messages = [
             {
@@ -413,7 +414,6 @@ def main() -> None:
                 output_filename = sanitize_filename(raw_suggested)
                 if output_filename != raw_suggested.strip():
                     logger.warning("LLM 建议的文件名已清洗: %s -> %s", repr(raw_suggested.strip()), output_filename)
-                logger.info("最终采用输出文件名: %s", output_filename)
             else:
                 output_filename = "design.md"
 
@@ -427,19 +427,10 @@ def main() -> None:
         if drafts_path.exists():
             final_output_path = output_dir / output_filename
             shutil.copy2(drafts_path, final_output_path)
-            logger.info("最终文档已输出到 ./output/%s", output_filename)
         else:
             logger.error("Agent 运行完成但未找到 drafts/design.md，请检查 Writer 是否正常执行")
 
-        # 12. 程序级统计（由中间件精确计数，不依赖 LLM 自述）
-        counts = orch_middleware.task_counts
-        total_tasks = sum(counts.values())
-        if counts:
-            stats_parts = [f"{k}x{v}" for k, v in sorted(counts.items())]
-            logger.info("执行统计: 共 %d 次子代理委派 (%s)", total_tasks, ", ".join(stats_parts))
-
-        # 13. Agent 的迭代摘要
-        # 从后向前找第一条有实质文本内容的 AIMessage，跳过 ToolMessage（工具回执）
+        # 12. Agent 的迭代摘要（从后向前找第一条有实质文本的 AIMessage）
         final_message = ""
         if result and result.get("messages"):
             for msg in reversed(result["messages"]):
@@ -448,10 +439,11 @@ def main() -> None:
                     if isinstance(content, str) and content.strip():
                         final_message = content
                         break
-        if final_message:
-            logger.info("迭代摘要:\n%s", final_message)
-        else:
+        if not final_message:
             logger.warning("未找到 Orchestrator 的文本摘要（最后一条消息可能是工具回执）")
+
+        # 13. 最终摘要（rich 表格 + 面板）
+        print_final_summary(output_filename, orch_middleware.task_counts, final_message)
     except SystemExit:
         raise
     except Exception:

@@ -18,7 +18,15 @@
       "Bash(.venv-wsl/bin/python -m pytest tests/test_run_with_hil.py::TestExecutionRouting -v 2>&1)",
       "Bash(source .venv-wsl/bin/activate)",
       "Bash(python -m pytest tests/test_logging_middleware.py -v)",
-      "Bash(python -m pytest tests/ -v --ignore=tests/test_agent_factory_provider_integration.py)"
+      "Bash(python -m pytest tests/ -v --ignore=tests/test_agent_factory_provider_integration.py)",
+      "Bash(python -m pytest tests/test_agent_factory_hil.py tests/test_logging_middleware.py tests/test_config_loader.py -v)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv sync)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run python -c \"import main; import src.rich_console; import src.middleware.logging_middleware; print\\('OK'\\)\")",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run pytest tests/test_agent_factory_hil.py tests/test_config_loader.py -q)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run python -c \"\nfrom src.rich_console import print_startup, print_task_delegation, print_reviewer_feedback, print_final_summary\nprint_startup\\('requirement.txt'\\)\nprint_task_delegation\\('orchestrator', 'writer', 1, '请根据需求文件撰写技术设计文档。\\\\n\\\\n需求文件路径：/input/requirement.txt'\\)\nprint_reviewer_feedback\\('VERDICT: REVISE\\\\n缺少数据血缘图的详细设计，建议补充第 4.3 节。'\\)\nprint_reviewer_feedback\\('VERDICT: ACCEPT\\\\n文档结构清晰，所有核心设计点均已覆盖。'\\)\nprint_final_summary\\('SAS数据血缘分析设计.md', {'writer': 2, 'reviewer': 2}, '共迭代 2 轮，第 2 轮 Reviewer 返回 ACCEPT。'\\)\n\")",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run python -c \"import deepagents; print\\(deepagents.__version__\\)\" 2)",
+      "Bash(1 UV_PROJECT_ENVIRONMENT=.venv-wsl uv run python -c \"import deepagents; help\\(deepagents.create_deep_agent\\)\")",
+      "WebFetch(domain:pypi.org)"
     ]
   }
 }

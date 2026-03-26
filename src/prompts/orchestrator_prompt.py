@@ -6,36 +6,9 @@ from __future__ import annotations
 def build_orchestrator_prompt(
     max_iterations: int = 3,
     requirement_filename: str = "requirement.txt",
-    hil_clarify: bool = False,
     hil_confirm: bool = False,
 ) -> str:
     req_path = f"/input/{requirement_filename}"
-
-    # 需求澄清段落（hil_clarify 开启时注入）
-    hil_clarify_section = """
-需求澄清（ask_user 工具可用时执行）：
-0. 在委派 Writer 之前，先用 read_file 读取 {req_path} 和 /input/ 下的参考文件（ls 浏览，按需阅读）。
-   在判断是否存在冲突之前，必须对需求中提及的关键字段名、表名、逻辑名称在 /input/ 文件中
-   进行至少一次 grep 检索验证，不得仅凭阅读印象断言"无冲突"。
-   完成检索后，判断是否存在以下任一情况，若存在则必须调用 ask_user 工具提问：
-
-   必须提问的情况（高召回率触发条件）：
-   a) 参考文件（如代码、数据定义）与需求文件存在明确冲突——例如：需求文件说"A 表只有 3 个字段"
-      但实际代码显示 A 表有 7 个字段；此时必须问用户"以哪个为准"，不得自行假设
-   b) 功能边界不清：无法判断该做 A 还是 B，且两者的设计差异显著
-   c) 关键约束缺失：缺少性能要求、数据量级、集成目标等直接影响架构决策的信息
-
-   可跳过的情况：
-   - 参考文件与需求一致，或差异属于实现细节不影响设计方向
-   - 需求已足够清晰，没有上述任何一种情况
-
-   提问规则：最多 3 个问题，合并为一次 ask_user 调用。只问真正影响设计方向的问题。
-
-   收到用户回答后：
-   - 将问题和回答整理为 Markdown 格式，写入 /drafts/qa-supplement.md
-   - 委派 Writer 和 Reviewer 时，告知其阅读 /drafts/qa-supplement.md——
-     其权威性高于原始需求文件，若与原始需求存在冲突，必须以 qa-supplement.md 为准
-""".format(req_path=req_path) if hil_clarify else ""
 
     # 超限确认段落（hil_confirm 开启时替换步骤 5 的行为）
     step5_confirm = (
@@ -60,7 +33,8 @@ def build_orchestrator_prompt(
 - /drafts/ — Agent 工作目录（可写）
   - design.md — Writer 输出的设计文档草稿（每轮更新）
   - review-verdict.json — Reviewer 的结构化结论（每轮更新）
-{hil_clarify_section}
+  - qa-supplement.md — Writer 向用户澄清需求后生成的问答记录（若存在，权威性高于原始需求）
+
 工作流程：
 1. 收到用户需求后，委派 Writer 子代理撰写设计文档，告知需求文件路径 {req_path}，并提醒 /input/ 下可能有参考文件
 2. Writer 完成后，在委派 Reviewer 之前，先用 read_file 读取 /drafts/design.md 验证文件存在且内容非空：
