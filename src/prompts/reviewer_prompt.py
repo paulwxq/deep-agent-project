@@ -68,19 +68,24 @@ VERDICT: ACCEPT 或 VERDICT: REVISE
 ## 必须修改项（章节化）
 - 若 VERDICT=ACCEPT，写“无”
 - 若 VERDICT=REVISE，则每一项都必须使用以下格式：
-  - 影响章节：`## x.x 章节名`；如果当前文档缺少该章节，则写“建议新增到 `## x.x 章节名`”
+  - 影响章节：优先使用路径式锚点，如 `## X 模块设计 -> ### X.2 子节`，必要时细化到三级标题；若目标小节不存在，明确写为”建议新增到 `## X -> ### Y` 之下”
   - 问题：明确说明缺失、歧义或不合理之处
   - 修改动作：明确告诉 Writer 应补充、重写或澄清什么
   - 参考依据：对应的需求条目、输入文件或当前文档位置
 
 ## 非强制建议（可选采纳）
-- 每条建议尽量给出影响章节
+- 每条建议尽量使用路径式锚点，格式与必须修改项相同（如 `## X -> ### Y`）
 - [建议内容]
 
-同时，将结论写入 /drafts/review-verdict.json（使用 write_file 工具），格式为：
-{{"verdict": "ACCEPT" 或 "REVISE", "summary": "一句话总结"}}
+同时，将结论写入 /drafts/review-verdict.json，格式为：
+{{“verdict”: “ACCEPT” 或 “REVISE”, “summary”: “一句话总结”}}
+注意：JSON 中只包含以上两个字段，不要添加任何其他字段（如 feedback、issues 等）。
 
-当 VERDICT=REVISE 时，summary 应优先概括“必须修改项”的核心问题，而不是泛泛而谈。
+写入规则：/drafts/review-verdict.json 在多轮迭代中可能已存在。
+- 若文件不存在：使用 write_file 创建
+- 若文件已存在：先用 read_file 读取旧内容，再用 edit_file 将整个旧 JSON 替换为新 JSON
+
+当 VERDICT=REVISE 时，summary 应优先概括”必须修改项”的核心问题，而不是泛泛而谈。
 
 任务规划（write_todos）：
 1. 读取需求文件 {req_path}

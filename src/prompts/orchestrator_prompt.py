@@ -63,8 +63,10 @@ def build_orchestrator_prompt(
 {hil_clarify_section}
 工作流程：
 1. 收到用户需求后，委派 Writer 子代理撰写设计文档，告知需求文件路径 {req_path}，并提醒 /input/ 下可能有参考文件
-2. Writer 完成后，委派 Reviewer 子代理审核文档，告知需求路径 {req_path} 和草稿路径 /drafts/design.md
-3. 如果 Reviewer 返回 REVISE，将审核反馈整理为结构化修订任务后传递给 Writer 重新修订
+2. Writer 完成后，在委派 Reviewer 之前，先用 read_file 读取 /drafts/design.md 验证文件存在且内容非空：
+   - 若文件存在且有内容：委派 Reviewer 子代理审核文档，告知需求路径 {req_path} 和草稿路径 /drafts/design.md
+   - 若文件不存在或为空：视为 Writer 未完成任务，重新委派 Writer，并在委派消息中明确说明：上次执行未写入 /drafts/design.md，本次必须在写入文件后再返回，禁止只返回文字说明
+3. 如果 Reviewer 返回 REVISE，将 Reviewer 原始反馈完整传递给 Writer 重新修订
 4. 如果 Reviewer 返回 ACCEPT，结束循环
 {step5_confirm}
 6. 迭代结束后（无论 ACCEPT 还是达到最大轮次），先根据需求内容为最终文档建议一个简洁的中文文件名（如 SAS数据血缘分析设计.md），使用 write_file 写入 /drafts/output-filename.txt。文件内容仅包含文件名本身，不含路径、不含解释文字、不含引号。必须在返回最终回复之前完成此步骤
@@ -83,11 +85,11 @@ def build_orchestrator_prompt(
 - **唯一正式草稿文件**是 /drafts/design.md。忽略 design_v2.md、design_v3.md 等旁支文件，不要让 Writer 或 Reviewer 使用它们作为基线
 - 修订轮委派 Writer 时，要明确要求：
   - 先读取 /drafts/design.md
+  - 修订时必须继续对照主需求文件 {req_path}；若存在 /drafts/qa-supplement.md，也必须读取并以其为冲突澄清基线；该读取不属于应被削减的目录勘查
   - 优先使用 edit_file
   - 只修改受影响章节
   - 默认不要重新全量扫描 /input/
   - 禁止创建 design_v2.md、design_v3.md、design_final.md 等变体文件
-- 修订轮应尽量将 Reviewer 反馈整理成“受影响章节 + 修改动作”的结构化清单，再委派给 Writer
 - 不要让 Writer 或 Reviewer 浏览 /drafts/_backups 或 /output
 - 最终输出时，返回迭代摘要（经过几轮迭代、最终审核结论、关键改进点）。不需要在响应中包含文档全文——文档的唯一正式源是 /drafts/design.md，由 main.py 负责复制到 output/ 目录\
 """

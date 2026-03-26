@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
@@ -23,6 +24,35 @@ from src.prompts.writer_prompt import build_writer_prompt
 from src.tools.hil import ask_user, confirm_continue as confirm_continue_tool
 
 logger = logging.getLogger("deep_agent_project")
+
+
+def _log_skills_config(agent_name: str, skill_dirs: list[str]) -> None:
+    """扫描 skills 目录，确认技能已正确配置并可被 SDK 发现。"""
+    for skill_dir in skill_dirs:
+        actual_path = Path(skill_dir.lstrip("/"))
+        if not actual_path.exists():
+            logger.warning(
+                "技能目录不存在 [%s]: %s（该 Agent 将无技能可用）",
+                agent_name, skill_dir,
+                extra={"agent_name": "system"},
+            )
+            continue
+        skill_names = sorted(
+            d.name for d in actual_path.iterdir()
+            if d.is_dir() and (d / "SKILL.md").exists()
+        )
+        if skill_names:
+            logger.debug(
+                "技能配置 [%s]: 目录=%s → 发现技能 %s",
+                agent_name, skill_dir, skill_names,
+                extra={"agent_name": "system"},
+            )
+        else:
+            logger.warning(
+                "技能目录为空或无 SKILL.md [%s]: %s",
+                agent_name, skill_dir,
+                extra={"agent_name": "system"},
+            )
 
 
 def _log_agent_model_config(config: AppConfig, agent_name: str) -> None:
@@ -100,7 +130,7 @@ def create_orchestrator_agent(
         "system_prompt": build_writer_prompt(requirement_filename),
         "tools": tools,
         "model": writer_model,
-        "skills": ["/skills/tech-doc-writing/"],
+        "skills": ["/skills/writer/"],
         "middleware": [LoggingMiddleware(agent_name="writer")],
     }
 
@@ -114,9 +144,12 @@ def create_orchestrator_agent(
         "system_prompt": build_reviewer_prompt(requirement_filename),
         "tools": tools,
         "model": reviewer_model,
-        "skills": ["/skills/tech-doc-review/"],
+        "skills": ["/skills/reviewer/"],
         "middleware": [LoggingMiddleware(agent_name="reviewer")],
     }
+
+    _log_skills_config("writer", writer_subagent["skills"])
+    _log_skills_config("reviewer", reviewer_subagent["skills"])
 
     # 4. 组装 Orchestrator
     orch_middleware = LoggingMiddleware(agent_name="orchestrator")

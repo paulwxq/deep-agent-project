@@ -21,6 +21,7 @@ logger = logging.getLogger("deep_agent_project")
 MAX_CONTENT_PREVIEW = 800
 MAX_TASK_MESSAGE_LOG = 2000
 MAX_TASK_RESULT_LOG = 2000
+MAX_TOOL_RESULT_LOG = 500
 
 
 class LoggingMiddleware(AgentMiddleware):
@@ -34,6 +35,7 @@ class LoggingMiddleware(AgentMiddleware):
     def __init__(self, agent_name: str = "unknown"):
         self._agent_name = agent_name
         self.task_counts: dict[str, int] = {}
+        self._file_tool_called: bool = False  # write_file/edit_file 是否已被调用过
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         """环绕式钩子：执行模型调用，并在调用后记录可见输出。"""
@@ -56,10 +58,13 @@ class LoggingMiddleware(AgentMiddleware):
         tool_name = tool_call.get("name", "unknown") if isinstance(tool_call, dict) else "unknown"
 
         if tool_name != "task":
-            logger.debug(
-                "工具执行: %s", tool_name, extra={"agent_name": self._agent_name}
-            )
-            return handler(request)
+            args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
+            if tool_name in ("write_file", "edit_file"):
+                self._file_tool_called = True
+            _log_tool_args(tool_name, args, self._agent_name)
+            result = handler(request)
+            _log_tool_result(tool_name, result, self._agent_name)
+            return result
 
         args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
         target = args.get("subagent_type", "unknown")
@@ -175,6 +180,54 @@ class LoggingMiddleware(AgentMiddleware):
                 ", ".join(tool_names),
                 extra={"agent_name": self._agent_name},
             )
+        elif msg.content and self._agent_name == "writer" and not self._file_tool_called:
+            logger.debug(
+                "⚠️ Writer 返回文字内容但尚未调用 write_file/edit_file，任务可能未完成",
+                extra={"agent_name": self._agent_name},
+            )
+
+
+def _log_tool_args(tool_name: str, args: dict, agent_name: str) -> None:
+    """记录工具调用的关键参数（路径、内容长度等）。"""
+    path = args.get("path") or args.get("file_path") or ""
+    content = args.get("content") or args.get("new_string") or ""
+    pattern = args.get("pattern") or ""
+
+    if path and content:
+        logger.debug(
+            "工具执行: %s | path=%s content_len=%d",
+            tool_name, path, len(content),
+            extra={"agent_name": agent_name},
+        )
+    elif path and pattern:
+        logger.debug(
+            "工具执行: %s | path=%s pattern=%s",
+            tool_name, path, pattern[:100],
+            extra={"agent_name": agent_name},
+        )
+    elif path:
+        logger.debug(
+            "工具执行: %s | path=%s",
+            tool_name, path,
+            extra={"agent_name": agent_name},
+        )
+    else:
+        logger.debug(
+            "工具执行: %s | args=%s",
+            tool_name, str(args)[:200],
+            extra={"agent_name": agent_name},
+        )
+
+
+def _log_tool_result(tool_name: str, result: Any, agent_name: str) -> None:
+    """记录工具执行结果（首 MAX_TOOL_RESULT_LOG 字符）。"""
+    result_str = result if isinstance(result, str) else str(result)
+    if result_str:
+        logger.debug(
+            "工具结果: %s | %s",
+            tool_name, result_str[:MAX_TOOL_RESULT_LOG],
+            extra={"agent_name": agent_name},
+        )
 
 
 def _extract_task_result_text(result: Any) -> str:

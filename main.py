@@ -12,7 +12,7 @@ import shutil
 import sys
 import unicodedata
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -24,6 +24,13 @@ _WINDOWS_RESERVED = frozenset({
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 })
+
+
+def _stamp_filename(filename: str) -> str:
+    """在文件名 stem 后插入北京时间戳，格式：name_yyyyMMdd-HHmmss.md"""
+    ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d-%H%M%S")
+    p = Path(filename)
+    return f"{p.stem}_{ts}{p.suffix}"
 
 
 def sanitize_filename(raw: str, default: str = "design.md") -> str:
@@ -409,6 +416,8 @@ def main() -> None:
                 logger.info("最终采用输出文件名: %s", output_filename)
             else:
                 output_filename = "design.md"
+
+        output_filename = _stamp_filename(output_filename)
 
         # 11. 复制最终产物到 ./output/
         output_dir = Path("output")

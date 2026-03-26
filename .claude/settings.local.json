@@ -15,7 +15,10 @@
       "Bash(.venv-wsl/bin/python -c \"\nfrom src.tools.hil import ask_user, confirm_continue\nfrom src.prompts.orchestrator_prompt import build_orchestrator_prompt\nfrom src.prompts.writer_prompt import build_writer_prompt\nfrom src.prompts.reviewer_prompt import build_reviewer_prompt\nw = build_writer_prompt\\(\\)\nr = build_reviewer_prompt\\(\\)\nassert 'qa-supplement.md' in w\nassert 'qa-supplement.md' in r\nassert '权威性高于原始需求文件' in w\nassert '权威性高于原始需求文件' in r\nop_hil = build_orchestrator_prompt\\(3, 'req.txt', hil_clarify=True, hil_confirm=True\\)\nassert 'grep' in op_hil\nassert 'confirm_continue' in op_hil\nprint\\('All checks passed'\\)\n\")",
       "Bash(.venv-wsl/bin/python -m pytest tests/test_run_with_hil.py tests/test_agent_factory_hil.py -v)",
       "Bash(.venv-wsl/bin/python -m pytest tests/ -q)",
-      "Bash(.venv-wsl/bin/python -m pytest tests/test_run_with_hil.py::TestExecutionRouting -v 2>&1)"
+      "Bash(.venv-wsl/bin/python -m pytest tests/test_run_with_hil.py::TestExecutionRouting -v 2>&1)",
+      "Bash(source .venv-wsl/bin/activate)",
+      "Bash(python -m pytest tests/test_logging_middleware.py -v)",
+      "Bash(python -m pytest tests/ -v --ignore=tests/test_agent_factory_provider_integration.py)"
     ]
   }
 }

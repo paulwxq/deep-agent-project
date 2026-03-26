@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from langchain_core.language_models import BaseChatModel
+
+logger = logging.getLogger("deep_agent_project")
 
 from src.config_loader import AgentModelConfig, ProviderConfig
 from src.reasoning_compat import (
@@ -89,6 +92,8 @@ def _create_dashscope(
         if "budget_tokens" in thinking:
             kwargs["thinking_budget"] = thinking["budget_tokens"]
 
+    safe = {k: v for k, v in kwargs.items() if k != "api_key"}
+    logger.debug("模型构造 [dashscope/%s]: %s", agent_config.model, safe, extra={"agent_name": "system"})
     return ChatQwen(**kwargs)
 
 
@@ -123,6 +128,8 @@ def _create_anthropic_compatible(
     if "betas" in params:
         kwargs["betas"] = params["betas"]
 
+    safe = {k: v for k, v in kwargs.items() if k != "api_key"}
+    logger.debug("模型构造 [anthropic_compatible/%s]: %s", agent_config.model, safe, extra={"agent_name": "system"})
     return ChatAnthropic(**kwargs)
 
 
@@ -164,6 +171,8 @@ def _create_openai_compatible(
         and params["thinking"].get("type") == "enabled",
     )
 
+    safe = {k: v for k, v in kwargs.items() if k != "api_key"}
+    logger.debug("模型构造 [openai_compatible/%s]: %s", agent_config.model, safe, extra={"agent_name": "system"})
     return ReasoningCompatibleChatOpenAI(**kwargs)
 
 
@@ -206,6 +215,8 @@ def _create_deepseek(
         ),
     )
 
+    safe = {k: v for k, v in kwargs.items() if k != "api_key"}
+    logger.debug("模型构造 [deepseek/%s]: %s", agent_config.model, safe, extra={"agent_name": "system"})
     return ReasoningCompatibleChatDeepSeek(**kwargs)
 
 

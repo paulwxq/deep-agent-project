@@ -72,8 +72,8 @@ providers:
 # ========================================
 agents:
   orchestrator:
-    provider: "dashscope"
-    model: "qwen3-max"
+    provider: "deepseek"
+    model: "deepseek-chat"
     # Qwen3 系列：
     # - 支持在 params 中设置 thinking 或 enable_thinking/thinking_budget。
     # - 是否真正支持思考模式，取决于具体模型版本；qwen3-max 请以当前 DashScope 官方版本说明为准。
@@ -85,28 +85,29 @@ agents:
       thinking:
         type: "disabled"
       temperature: 0.3
-      max_tokens: 8192
-      max_retries: 6
+#      max_tokens: 8192
+      max_retries: 3
       timeout: 240
 
   writer:
-    provider: "moonshot"
-    model: "kimi-k2.5"
+    provider: "dashscope"
+    model: "qwen3-max"
     # 注意：kimi-k2.5 默认启用 thinking。
     # 在当前 deepagents / LangChain 工具调用链路下，thinking 模式会要求保留 reasoning_content，
-    # 本项目现在已支持自动回传 reasoning_content；如果要启用，可改为：
+    # 本项目现在已支持自动回传 reasoning_content；如果要禁用，可改为：
     # thinking:
-    #   type: "enabled"
     #   type: "disabled"
+    # 如需限制 thinking token 预算，可加：
     #   budget_tokens: 4096
     # 但仍建议先做真实 API smoke test。
     # 当前配置为显式启用 thinking，以增强 Writer 的长文档组织与修订能力。
     # 同时不要手动设置 temperature：k2.5 会根据 thinking 状态使用固定值（启用时 1.0，禁用时 0.6）。
     params:
       thinking:
-        type: "enabled"
-      max_tokens: 16384
-      max_retries: 6
+        type: "disabled"
+#      max_tokens: 16384
+      max_retries: 3
+      temperature: 0.3
       timeout: 600
 
   reviewer:
@@ -123,8 +124,8 @@ agents:
       thinking:
         type: "disabled"
       temperature: 0.2
-      max_tokens: 8192
-      max_retries: 6
+#      max_tokens: 8192
+      max_retries: 3
       timeout: 300
 
 # ========================================

@@ -10,8 +10,7 @@ def build_writer_prompt(requirement_filename: str = "requirement.txt") -> str:
 
 工作模式：
 1. **初稿模式**：当任务是根据需求首次撰写设计文档时，必须执行输入目录勘查。
-2. **修订模式**：当任务是根据 Reviewer 反馈修订文档时，默认不要重新全量勘查 /input/，
-   应先读取当前草稿和 Reviewer 反馈，只在某条反馈需要事实核对时再读取对应参考文件。
+2. **修订模式**：当任务是根据 Reviewer 反馈修订文档时，必须先读取 Reviewer 原始反馈、/drafts/design.md、主需求文件作为修订基线；若存在 /drafts/qa-supplement.md 也必须读取。默认不要重新全量勘查 /input/，只有某条反馈需要事实核对时才读取对应参考文件。
 
 初稿模式的输入目录勘查（开始写作前必须执行，不可跳过）：
 1. 用 read_file 读取主需求文件 {req_path}，充分理解需求
@@ -27,8 +26,8 @@ def build_writer_prompt(requirement_filename: str = "requirement.txt") -> str:
 6. 勘查完成后再开始撰写设计文档
 
 修订模式规则：
-1. 必须先读取 /drafts/design.md，并仔细理解当前文档结构
-2. 必须先根据 Reviewer 反馈识别受影响章节，再决定修改动作
+1. 必须先读取 Reviewer 原始反馈、/drafts/design.md，以及主需求文件 {req_path} 作为修订基线；若存在 /drafts/qa-supplement.md，也必须读取，并以其为冲突澄清基线——上述读取属于需求基线建立，不属于应被削减的目录勘查
+2. 对每条 Reviewer 意见，先核对是否与需求基线一致，再识别受影响章节，然后决定修改动作
 3. 默认不要重新全量勘查 /input/；只有在某条反馈需要事实核对时，才读取直接相关的输入文件
 4. 默认不要改动与反馈无关的章节
 5. 如 Reviewer 反馈中未给出章节名，也要先将反馈归类到最接近的现有章节后再修改
@@ -45,6 +44,7 @@ def build_writer_prompt(requirement_filename: str = "requirement.txt") -> str:
 - 修订模式优先使用 edit_file 修改 /drafts/design.md
 - 文档使用 Markdown 格式
 - 每次修订都更新同一文件，不要创建 design_v2.md、design_v3.md、design_final.md 等变体文件
+- **完成标志（强制）**：任务的唯一完成标志是成功调用 write_file 或 edit_file 将内容写入 /drafts/design.md。在文件写入完成之前，不得返回任何文字摘要、进度说明或"已完成"类表述；若文件未写入，任务视为未完成，必须继续执行直到写入成功。
 
 修订阶段的编辑策略：
 1. 首选 edit_file
@@ -69,12 +69,14 @@ def build_writer_prompt(requirement_filename: str = "requirement.txt") -> str:
 - 你有权不接受某些建议，但必须给出理由
 - 如果你决定不采纳 Reviewer 的某项建议，请在 /drafts/design.md 末尾的"修订记录"章节简要说明理由
 - 修订时优先保留原文中已经正确的章节，不要为了局部修改而重写全文
-- 修订记录格式：
+- 修订记录格式（极简锚点，写在文档末尾）：
   ## 修订记录
-  ### 第 N 轮修订
-  - 采纳：[简述采纳的建议]
-  - 未采纳：[建议内容] → 理由：[你的理由]
+  - 日期 | `## X章节 -> ### Y小节` | 修改要点（极短摘要） | 已采纳
+  - 日期 | `## X章节 -> ### Y小节` | Reviewer 建议摘要 | 未采纳：一行理由
 
 任务规划：
-开始工作前，使用 write_todos 创建任务计划，追踪进度。建议将"勘查 /input/ 目录结构"作为第一个 todo 条目，完成后再开始写作相关条目。\
+开始工作前，使用 write_todos 创建任务计划，追踪进度。按工作模式分别规划：
+
+- **初稿模式**：第一个 todo 为"读取主需求文件并勘查 /input/ 目录结构"，完成后进入参考文件阅读、章节设计、撰写、落盘等条目。
+- **修订模式**：第一个 todo 为"读取 Reviewer 反馈、/drafts/design.md、主需求文件 {req_path}，若存在 /drafts/qa-supplement.md 也同步读取"；第二个 todo 为"核对 Reviewer 意见是否与需求基线一致，识别受影响章节，制定局部修改计划"；只有某条反馈需要事实核对时，才追加"读取相关参考文件"条目。\
 """

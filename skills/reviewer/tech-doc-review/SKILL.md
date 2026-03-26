@@ -9,11 +9,11 @@ tags: [review, quality-assurance, technical-document]
 
 ## 审核准备
 
-审核前**必须**先读取需求原文 /drafts/requirement.md，再读取设计文档 /drafts/design.md，对照审核。
+审核前**必须**：先确认 `/input/<requirement_filename>` 是否存在；若不存在，立即向 Orchestrator 报错并停止审核，不得继续盲目执行。确认存在后，读取需求原文 `/input/<requirement_filename>`，再读取设计文档 `/drafts/design.md`，对照审核。
 
 ## 审核维度
 
-### 1. 需求覆盖性检查（对照 /drafts/requirement.md）
+### 1. 需求覆盖性检查（对照 /input/<requirement_filename>）
 - [ ] 逐条核对：需求文档中的每一条功能需求，在设计文档中是否有对应的技术方案？
 - [ ] 非功能需求（日志、配置、部署、多环境支持等）是否都有设计覆盖？
 - [ ] 对于长需求文档，使用 grep 工具在 /drafts/design.md 中搜索需求关键词，辅助确认覆盖情况（避免仅凭 read_file 后的记忆遗漏中间段落）
@@ -53,7 +53,7 @@ tags: [review, quality-assurance, technical-document]
 
 当结论为 `REVISE` 时，每条必须修改意见都应至少包含：
 
-- 影响章节：明确指出当前文档中应修改的章节；若缺少该章节，指出应新增到哪个章节附近
+- 影响章节：使用路径式锚点，如 `## X -> ### Y`；若目标小节不存在，写为"建议新增到 `## X -> ### Y` 之下"
 - 问题：具体缺什么或哪里不清晰
 - 修改动作：明确告诉 Writer 应补充、重写或澄清什么
 - 参考依据：来自需求、参考文件或当前文档中的哪一处
