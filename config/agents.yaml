@@ -133,6 +133,11 @@ agents:
 # ========================================
 tools:
   tavily:
-    enabled: false
+    enabled: true
     api_key_env: "TAVILY_API_KEY"
     max_results: 5
+
+  context7:
+    enabled: true
+    api_key_env: "CONTEXT7_API_KEY"
+    url: "https://mcp.context7.com/mcp"

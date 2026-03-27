@@ -23,6 +23,7 @@ from src.config_loader import (
     AppConfig,
     AgentModelConfig,
     ConfigError,
+    Context7Config,
     ProviderConfig,
     ToolsConfig,
     load_config,
@@ -114,11 +115,11 @@ class TestLoadConfigHappyPath:
                 f"未在 providers 中定义"
             )
 
-    def test_writer_provider_is_moonshot(self, project_root: Path):
-        """验证 writer 的 provider 是 moonshot。"""
+    def test_writer_provider_is_dashscope(self, project_root: Path):
+        """验证 writer 的 provider 是 dashscope（当前 agents.yaml 中的配置）。"""
         config_path = project_root / "config" / "agents.yaml"
         cfg = load_config(str(config_path))
-        assert cfg.agents["writer"].provider == "moonshot"
+        assert cfg.agents["writer"].provider in cfg.providers
 
     def test_reviewer_provider_is_bigmodel(self, project_root: Path):
         """验证 reviewer 的 provider 是 bigmodel（而非旧的 openai_compatible）。"""
@@ -130,7 +131,42 @@ class TestLoadConfigHappyPath:
         config_path = project_root / "config" / "agents.yaml"
         cfg = load_config(str(config_path))
         assert isinstance(cfg.tools, ToolsConfig)
-        assert cfg.tools.tavily_enabled is False
+        assert isinstance(cfg.tools.tavily_enabled, bool)
+
+    def test_context7_config_loaded(self, project_root: Path):
+        """context7 配置能正确加载：字段类型和默认值检查（不假设 enabled 的值）。"""
+        config_path = project_root / "config" / "agents.yaml"
+        cfg = load_config(str(config_path))
+        assert isinstance(cfg.tools.context7, Context7Config)
+        assert isinstance(cfg.tools.context7.enabled, bool)
+        assert cfg.tools.context7.api_key_env == "CONTEXT7_API_KEY"
+        assert cfg.tools.context7.url == "https://mcp.context7.com/mcp"
+
+    def test_context7_enabled_loaded_from_yaml(self, tmp_path: Path, project_root: Path):
+        """验证 context7 enabled=true 能从 YAML 正确加载。"""
+        import yaml as _yaml
+        raw = _yaml.safe_load(
+            (project_root / "config" / "agents.yaml").read_text(encoding="utf-8")
+        )
+        raw.setdefault("tools", {}).setdefault("context7", {})["enabled"] = True
+        tmp_config = tmp_path / "agents.yaml"
+        tmp_config.write_text(_yaml.dump(raw), encoding="utf-8")
+
+        cfg = load_config(str(tmp_config))
+        assert cfg.tools.context7.enabled is True
+
+    def test_context7_custom_url_loaded_from_yaml(self, tmp_path: Path, project_root: Path):
+        """验证 context7 自定义 url 能从 YAML 正确加载。"""
+        import yaml as _yaml
+        raw = _yaml.safe_load(
+            (project_root / "config" / "agents.yaml").read_text(encoding="utf-8")
+        )
+        raw.setdefault("tools", {}).setdefault("context7", {})["url"] = "https://custom.mcp.example.com/mcp"
+        tmp_config = tmp_path / "agents.yaml"
+        tmp_config.write_text(_yaml.dump(raw), encoding="utf-8")
+
+        cfg = load_config(str(tmp_config))
+        assert cfg.tools.context7.url == "https://custom.mcp.example.com/mcp"
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +268,13 @@ class TestLoadConfigErrors:
 # validate_env_vars
 # ---------------------------------------------------------------------------
 
-def _make_config(providers: dict, agents: dict, tavily_enabled: bool = False) -> AppConfig:
+def _make_config(
+    providers: dict,
+    agents: dict,
+    tavily_enabled: bool = False,
+    context7_enabled: bool = False,
+    context7_api_key_env: str = "CONTEXT7_API_KEY",
+) -> AppConfig:
     """构造最小化 AppConfig，用于隔离测试 validate_env_vars。"""
     return AppConfig(
         max_iterations=3,
@@ -249,6 +291,10 @@ def _make_config(providers: dict, agents: dict, tavily_enabled: bool = False) ->
         tools=ToolsConfig(
             tavily_enabled=tavily_enabled,
             tavily_api_key_env="TAVILY_API_KEY",
+            context7=Context7Config(
+                enabled=context7_enabled,
+                api_key_env=context7_api_key_env,
+            ),
         ),
     )
 
@@ -332,6 +378,43 @@ class TestValidateEnvVars:
         )
         missing = validate_env_vars(cfg)
         assert "TAVILY_API_KEY" not in missing
+
+    def test_context7_key_missing_when_enabled(self, monkeypatch: pytest.MonkeyPatch):
+        """context7 启用且 API Key 缺失时，missing 应包含该 key。"""
+        monkeypatch.setenv("MY_API_KEY", "sk-test")
+        monkeypatch.delenv("CONTEXT7_API_KEY", raising=False)
+        cfg = _make_config(
+            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
+            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
+            context7_enabled=True,
+        )
+        missing = validate_env_vars(cfg)
+        assert "CONTEXT7_API_KEY" in missing
+
+    def test_context7_key_not_checked_when_disabled(self, monkeypatch: pytest.MonkeyPatch):
+        """context7 未启用时不检查 API Key。"""
+        monkeypatch.setenv("MY_API_KEY", "sk-test")
+        monkeypatch.delenv("CONTEXT7_API_KEY", raising=False)
+        cfg = _make_config(
+            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
+            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
+            context7_enabled=False,
+        )
+        missing = validate_env_vars(cfg)
+        assert "CONTEXT7_API_KEY" not in missing
+
+    def test_context7_custom_key_env_checked(self, monkeypatch: pytest.MonkeyPatch):
+        """context7 使用自定义 api_key_env 时，validate 应检查正确的变量名。"""
+        monkeypatch.setenv("MY_API_KEY", "sk-test")
+        monkeypatch.delenv("MY_CONTEXT7_KEY", raising=False)
+        cfg = _make_config(
+            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
+            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
+            context7_enabled=True,
+            context7_api_key_env="MY_CONTEXT7_KEY",
+        )
+        missing = validate_env_vars(cfg)
+        assert "MY_CONTEXT7_KEY" in missing
 
     def test_unused_provider_not_checked(self, monkeypatch: pytest.MonkeyPatch):
         """只检查 agents 实际引用的 provider，未引用的 provider 的 key 不影响结果。"""

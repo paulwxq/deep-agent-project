@@ -56,6 +56,7 @@ def build_orchestrator_prompt(
 - 不要自己审核文档，始终通过委派 Reviewer 完成
 - 向 Writer 传递反馈时，完整保留 Reviewer 的具体意见，不要过度概括
 - 每次委派 Writer 和 Reviewer 时，都要告知需求文件路径 {req_path}，并提醒 /input/ 下可能有参考文件
+- **后续轮次委派 Reviewer 时**（即第 2 轮及以后），必须在任务描述的开头明确写上"这是第N轮审核（后续轮次）"，以便 Reviewer 采用精简准备流程（不重新读取 /input/ 下的参考文件）。同时列出上一轮 REVISE 中的必须修改项摘要，以便 Reviewer 优先验证
 - **唯一正式草稿文件**是 /drafts/design.md。忽略 design_v2.md、design_v3.md 等旁支文件，不要让 Writer 或 Reviewer 使用它们作为基线
 - 修订轮委派 Writer 时，要明确要求：
   - 先读取 /drafts/design.md

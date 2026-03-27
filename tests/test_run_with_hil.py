@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import re
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -363,7 +363,11 @@ class TestExecutionRouting:
         )
 
     def _call_main(self, tmp_path, monkeypatch, cfg, extra_argv=None):
-        """在 tmp_path 中调用真实 main()，返回 (mock_hil, mock_agent)。"""
+        """在 tmp_path 中调用真实 main()，返回 (mock_hil_async, mock_agent)。
+
+        main() 现在通过 asyncio.run(_async_main(...)) 执行，
+        内部路由为：interactive → _run_with_hil_async，否则 agent.ainvoke。
+        """
         import sys
         import main as main_module
 
@@ -375,10 +379,10 @@ class TestExecutionRouting:
         monkeypatch.setattr(sys, "argv", ["main.py", "-f", "req.txt"] + (extra_argv or []))
 
         mock_agent = MagicMock()
-        mock_agent.invoke.return_value = {"messages": []}
+        mock_agent.ainvoke = AsyncMock(return_value={"messages": []})
         mock_middleware = MagicMock()
         mock_middleware.task_counts = {}
-        mock_hil = MagicMock(return_value={"messages": []})
+        mock_hil_async = AsyncMock(return_value={"messages": []})
 
         with (
             patch("src.logger.setup_logger", return_value=MagicMock()),
@@ -386,41 +390,42 @@ class TestExecutionRouting:
             patch("src.config_loader.validate_env_vars", return_value=[]),
             patch("src.agent_factory.create_orchestrator_agent",
                   return_value=(mock_agent, mock_middleware)),
-            patch.object(main_module, "_run_with_hil", mock_hil),
+            patch.object(main_module, "_run_with_hil_async", mock_hil_async),
             patch("main.os.chdir"),      # 阻止 main() 切换到 project_root
             patch("main.load_dotenv"),
             patch("main.shutil"),
         ):
             main_module.main()
 
-        return mock_hil, mock_agent
+        return mock_hil_async, mock_agent
 
     def test_run_with_hil_importable_from_main(self):
-        """_run_with_hil 是 main 模块级函数，可直接导入。"""
-        from main import _run_with_hil
+        """_run_with_hil 和 _run_with_hil_async 都是 main 模块级函数，可直接导入。"""
+        from main import _run_with_hil, _run_with_hil_async
         assert callable(_run_with_hil)
+        assert callable(_run_with_hil_async)
 
-    def test_interactive_flag_routes_to_run_with_hil(self, tmp_path, monkeypatch):
-        """-i 标志 → main() 将两个 HIL flag 置 True → 调用 _run_with_hil，不调用 invoke。"""
+    def test_interactive_flag_routes_to_run_with_hil_async(self, tmp_path, monkeypatch):
+        """-i 标志 → main() 将两个 HIL flag 置 True → 调用 _run_with_hil_async，不调用 ainvoke。"""
         # config 默认关闭，-i 会在运行时覆盖
         cfg = self._make_config(hil_clarify=False, hil_confirm=False)
-        mock_hil, mock_agent = self._call_main(tmp_path, monkeypatch, cfg, extra_argv=["-i"])
-        mock_hil.assert_called_once()
-        mock_agent.invoke.assert_not_called()
+        mock_hil_async, mock_agent = self._call_main(tmp_path, monkeypatch, cfg, extra_argv=["-i"])
+        mock_hil_async.assert_called_once()
+        mock_agent.ainvoke.assert_not_called()
 
-    def test_yaml_hil_clarify_routes_to_run_with_hil(self, tmp_path, monkeypatch):
-        """YAML 设置 hil_clarify=True（不加 -i）→ main() 同样路由到 _run_with_hil。"""
+    def test_yaml_hil_clarify_routes_to_run_with_hil_async(self, tmp_path, monkeypatch):
+        """YAML 设置 hil_clarify=True（不加 -i）→ main() 路由到 _run_with_hil_async。"""
         cfg = self._make_config(hil_clarify=True, hil_confirm=False)
-        mock_hil, mock_agent = self._call_main(tmp_path, monkeypatch, cfg)
-        mock_hil.assert_called_once()
-        mock_agent.invoke.assert_not_called()
+        mock_hil_async, mock_agent = self._call_main(tmp_path, monkeypatch, cfg)
+        mock_hil_async.assert_called_once()
+        mock_agent.ainvoke.assert_not_called()
 
-    def test_non_interactive_routes_to_invoke(self, tmp_path, monkeypatch):
-        """两个 HIL flag 均 False，不加 -i → main() 调用 agent.invoke，不调用 _run_with_hil。"""
+    def test_non_interactive_routes_to_ainvoke(self, tmp_path, monkeypatch):
+        """两个 HIL flag 均 False，不加 -i → main() 调用 agent.ainvoke，不调用 _run_with_hil_async。"""
         cfg = self._make_config(hil_clarify=False, hil_confirm=False)
-        mock_hil, mock_agent = self._call_main(tmp_path, monkeypatch, cfg)
-        mock_hil.assert_not_called()
-        mock_agent.invoke.assert_called_once()
+        mock_hil_async, mock_agent = self._call_main(tmp_path, monkeypatch, cfg)
+        mock_hil_async.assert_not_called()
+        mock_agent.ainvoke.assert_called_once()
 
     def test_main_logs_exception_and_exits_when_agent_execution_fails(self, tmp_path, monkeypatch):
         import sys
@@ -435,7 +440,7 @@ class TestExecutionRouting:
         cfg = self._make_config(hil_clarify=False, hil_confirm=False)
         mock_logger = MagicMock()
         mock_agent = MagicMock()
-        mock_agent.invoke.side_effect = RuntimeError("request timeout")
+        mock_agent.ainvoke = AsyncMock(side_effect=RuntimeError("request timeout"))
         mock_middleware = MagicMock()
         mock_middleware.task_counts = {}
 
@@ -448,7 +453,7 @@ class TestExecutionRouting:
             patch("main.os.chdir"),
             patch("main.load_dotenv"),
             patch("main.shutil"),
-            patch.object(main_module, "_run_with_hil", MagicMock()),
+            patch.object(main_module, "_run_with_hil_async", AsyncMock()),
         ):
             with patch("sys.exit", side_effect=SystemExit(1)) as mock_exit:
                 try:

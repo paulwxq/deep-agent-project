@@ -41,14 +41,22 @@ class LoggingMiddleware(AgentMiddleware):
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         """环绕式钩子：执行模型调用，并在调用后记录可见输出。"""
         response = handler(request)
+        self._handle_model_response(response)
+        return response
 
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        """wrap_model_call 的异步版本，供 astream()/ainvoke() 使用。"""
+        response = await handler(request)
+        self._handle_model_response(response)
+        return response
+
+    def _handle_model_response(self, response: Any) -> None:
+        """处理模型响应的公共逻辑（同步/异步共用）。"""
         if hasattr(response, "result") and response.result:
             msgs = response.result if isinstance(response.result, list) else [response.result]
             for msg in msgs:
                 if isinstance(msg, AIMessage):
                     self._log_model_output(msg)
-
-        return response
 
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
         """环绕式钩子：执行工具调用，前后分别记录。
@@ -67,6 +75,33 @@ class LoggingMiddleware(AgentMiddleware):
             _log_tool_result(tool_name, result, self._agent_name)
             return result
 
+        args, target, task_message = self._prepare_task_delegation(request)
+        result = handler(request)
+        self._log_task_result(target, result)
+        return result
+
+    async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+        """wrap_tool_call 的异步版本，供 astream()/ainvoke() 使用。"""
+        tool_call = request.tool_call if hasattr(request, "tool_call") else {}
+        tool_name = tool_call.get("name", "unknown") if isinstance(tool_call, dict) else "unknown"
+
+        if tool_name != "task":
+            args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
+            if tool_name in ("write_file", "edit_file"):
+                self._file_tool_called = True
+            _log_tool_args(tool_name, args, self._agent_name)
+            result = await handler(request)
+            _log_tool_result(tool_name, result, self._agent_name)
+            return result
+
+        args, target, task_message = self._prepare_task_delegation(request)
+        result = await handler(request)
+        self._log_task_result(target, result)
+        return result
+
+    def _prepare_task_delegation(self, request: Any) -> tuple[dict, str, str]:
+        """提取 task 委派参数并打印委派日志（同步/异步共用）。"""
+        tool_call = request.tool_call if hasattr(request, "tool_call") else {}
         args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
         target = args.get("subagent_type", "unknown")
         task_message = args.get("description", "")
@@ -91,18 +126,19 @@ class LoggingMiddleware(AgentMiddleware):
             rich_console.print_task_delegation(
                 self._agent_name, target, self.task_counts[target], task_message
             )
+        return args, target, task_message
 
-        result = handler(request)
+    def _log_task_result(self, target: str, result: Any) -> None:
+        """记录 task 工具的返回结果（同步/异步共用）。
 
+        日志策略：
+        - 所有子代理：INFO 级别记录返回结果摘要（截断到 MAX_TASK_RESULT_LOG）
+        - Reviewer：额外输出到 rich console（终端高亮显示）
+        - 超长内容：DEBUG 级别记录完整文本（仅写入文件日志，不显示到终端）
+        """
         result_text = _extract_task_result_text(result)
 
-        logger.info(
-            "📥 [%s → %s] 返回结果: %s",
-            target,
-            self._agent_name,
-            result_text[:MAX_TASK_RESULT_LOG],
-            extra={"agent_name": self._agent_name},
-        )
+        # Reviewer 结果使用专用前缀，其他子代理使用通用前缀
         if target == "reviewer":
             logger.info(
                 "🔍 Reviewer 反馈: %s",
@@ -111,26 +147,25 @@ class LoggingMiddleware(AgentMiddleware):
             )
             rich_console.print_reviewer_feedback(result_text)
         else:
+            logger.info(
+                "📥 [%s → %s] 返回结果: %s",
+                target,
+                self._agent_name,
+                result_text[:MAX_TASK_RESULT_LOG],
+                extra={"agent_name": self._agent_name},
+            )
             rich_console.print_task_result(target, self._agent_name, result_text)
-        if len(result_text) > MAX_TASK_RESULT_LOG:
-            if target == "reviewer":
-                logger.info(
-                    "🔍 Reviewer 反馈（完整，%d字符）: %s",
-                    len(result_text),
-                    result_text,
-                    extra={"agent_name": self._agent_name},
-                )
-            else:
-                logger.debug(
-                    "📥 [%s → %s] 返回结果（完整，%d字符）: %s",
-                    target,
-                    self._agent_name,
-                    len(result_text),
-                    result_text,
-                    extra={"agent_name": self._agent_name},
-                )
 
-        return result
+        # 超长内容仅在 DEBUG 级别记录完整文本
+        if len(result_text) > MAX_TASK_RESULT_LOG:
+            logger.debug(
+                "📥 [%s → %s] 返回结果（完整，%d字符）: %s",
+                target,
+                self._agent_name,
+                len(result_text),
+                result_text,
+                extra={"agent_name": self._agent_name},
+            )
 
     def _log_model_output(self, msg: AIMessage) -> None:
         """记录 AIMessage 的可见输出和思维链（如果模型提供）。"""

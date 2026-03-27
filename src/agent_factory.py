@@ -74,8 +74,14 @@ def _log_agent_model_config(config: AppConfig, agent_name: str) -> None:
 def create_orchestrator_agent(
     config: AppConfig,
     requirement_filename: str = "requirement.txt",
+    context7_tools: list | None = None,
 ) -> tuple[CompiledStateGraph, LoggingMiddleware]:
     """根据配置创建完整的 Orchestrator Agent。
+
+    Args:
+        config: 应用全局配置。
+        requirement_filename: 需求文件名，用于构建提示词中的路径提示。
+        context7_tools: 已加载的 Context7 MCP 工具列表（异步加载后传入）。
 
     Returns:
         (agent, orch_middleware) — agent 图实例与 Orchestrator 的日志中间件。
@@ -100,6 +106,9 @@ def create_orchestrator_agent(
     )
 
     # 2. 构建可选工具列表
+    context7_tools = context7_tools or []
+    context7_tool_names = [t.name for t in context7_tools]
+
     tools: list = []
     if config.tools.tavily_enabled:
         from src.tools.web_search import create_web_search_tool
@@ -116,10 +125,13 @@ def create_orchestrator_agent(
     # Writer 调用 ask_user 也需要 checkpointer，只要 hil_clarify 开启图就必须是交互式的
     interactive = config.hil_clarify or bool(hil_tools)
 
-    # Writer 工具（含 ask_user，若 hil_clarify 开启）
-    writer_tools = list(tools)
+    # Writer 工具（含 ask_user、context7 tools，若相应配置开启）
+    writer_tools = list(tools) + list(context7_tools)
     if config.hil_clarify:
         writer_tools.append(ask_user)
+
+    # Reviewer 工具（含 tavily + context7 tools）
+    reviewer_tools = list(tools) + list(context7_tools)
 
     req_path = f"/input/{requirement_filename}"
 
@@ -131,7 +143,11 @@ def create_orchestrator_agent(
             f"需求文件在 {req_path}，同目录下其他文件为参考文件。"
             "草稿保存到 /drafts/design.md。接受反馈后修订文档。"
         ),
-        "system_prompt": build_writer_prompt(requirement_filename, hil_clarify=config.hil_clarify),
+        "system_prompt": build_writer_prompt(
+            requirement_filename,
+            hil_clarify=config.hil_clarify,
+            context7_tool_names=context7_tool_names,
+        ),
         "tools": writer_tools,
         "model": writer_model,
         "skills": ["/skills/writer/"],
@@ -145,8 +161,11 @@ def create_orchestrator_agent(
             "从需求覆盖性、可落地性、无歧义性、完整性、合理性评估，"
             "返回 ACCEPT 或 REVISE 结论及详细反馈。"
         ),
-        "system_prompt": build_reviewer_prompt(requirement_filename),
-        "tools": tools,
+        "system_prompt": build_reviewer_prompt(
+            requirement_filename,
+            context7_tool_names=context7_tool_names,
+        ),
+        "tools": reviewer_tools,
         "model": reviewer_model,
         "skills": ["/skills/reviewer/"],
         "middleware": [LoggingMiddleware(agent_name="reviewer")],

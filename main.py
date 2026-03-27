@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import re
 import shutil
@@ -113,7 +114,7 @@ def _read_console_input(prompt: str = "", logger=None) -> str:
     return cleaned
 
 
-def _backup_drafts_contents(drafts_dir: Path) -> Path | None:
+def _backup_drafts_contents(drafts_dir: Path, logger=None) -> Path | None:
     """备份 drafts 工作区内容到 ./drafts/_backups/drafts_YYYYMMDD_HHMMSS。
 
     只备份 drafts 根目录下除 `_backups` 之外的内容，历史备份目录不会被再次清理或打包。
@@ -275,6 +276,225 @@ def _run_with_hil(agent, initial_messages: list, thread_config: dict) -> dict:
     return result
 
 
+async def _run_with_hil_async(agent, initial_messages: list, thread_config: dict) -> dict:
+    """_run_with_hil 的异步版本，使用 agent.astream() 替代 agent.stream()。
+
+    与同步版本逻辑完全相同，但：
+    - async def + async for（供 asyncio.run 事件循环调度）
+    - 兼容 MCP 异步工具（同步 stream() 在同一事件循环内调用会死锁）
+    """
+    import logging as _logging
+    import re as _re
+
+    from langgraph.types import Command
+
+    _Q_PATTERN = _re.compile(r'^Q(\d+)[:.：、]\s*(.+)$')
+    _EXIT_CMDS = {"quit", "exit"}
+    _log = _logging.getLogger("deep_agent_project")
+
+    payload = {"messages": initial_messages}
+    result = None
+
+    while True:
+        interrupted = False
+        gen = agent.astream(payload, config=thread_config)
+        try:
+            async for event in gen:
+                interrupts = event.get("__interrupt__")
+                if not interrupts:
+                    continue
+
+                interrupted = True
+                interrupt_value = interrupts[0].value
+
+                # ── 第一类：需求澄清 ─────────────────────────────────────────
+                if "questions" in interrupt_value:
+                    questions = interrupt_value.get("questions", "（Agent 未提供具体问题）")
+
+                    q_matches = [
+                        (int(m.group(1)), line.strip())
+                        for line in questions.splitlines()
+                        if (m := _Q_PATTERN.match(line.strip()))
+                    ]
+                    actual_nums = [num for num, _ in q_matches]
+                    expected_nums = list(range(1, len(q_matches) + 1))
+                    protocol_valid = (
+                        2 <= len(q_matches) <= 3
+                        and actual_nums == expected_nums
+                    )
+
+                    print_ask_user(questions)
+
+                    if protocol_valid:
+                        console.print("  [dim]（请逐条回答，每条输入完成后按回车；输入 quit 终止）[/dim]")
+                        answers = []
+                        for num, _ in q_matches:
+                            print(f"A{num}：", end="", flush=True)
+                            ans = _read_console_input(logger=_log).strip()
+                            if ans.lower() in _EXIT_CMDS:
+                                _log.info("用户主动退出，程序终止")
+                                raise SystemExit(0)
+                            while not ans:
+                                ans = _read_console_input(logger=_log).strip()
+                                if ans.lower() in _EXIT_CMDS:
+                                    _log.info("用户主动退出，程序终止")
+                                    raise SystemExit(0)
+                            answers.append(f"A{num}：{ans}")
+                        user_answer = "\n".join(answers)
+                    else:
+                        if len(q_matches) > 3:
+                            _log.warning("问题数量超过上限 3 个，降级为自由文本回答")
+                        elif actual_nums != expected_nums:
+                            _log.warning(
+                                "问题编号不连续或不从 1 开始（实际: %s），降级为自由文本回答",
+                                actual_nums,
+                            )
+                        else:
+                            _log.warning(
+                                "问题文本中仅发现 %d 条 Qn: 格式行（需 2-3 条），降级为自由文本回答",
+                                len(q_matches),
+                            )
+                        lines: list[str] = []
+                        while True:
+                            line = _read_console_input(logger=_log)
+                            if line.lower() in _EXIT_CMDS:
+                                _log.info("用户主动退出，程序终止")
+                                raise SystemExit(0)
+                            if line == "" and lines:
+                                break
+                            if line:
+                                lines.append(line)
+                        user_answer = "\n".join(lines)
+
+                    payload = Command(resume=user_answer)
+
+                # ── 第二类：超限确认 ─────────────────────────────────────────
+                elif "status" in interrupt_value:
+                    status = interrupt_value.get("status", "迭代已达上限")
+                    print_confirm_continue(status)
+                    _YES_INPUTS = {"yes", "y", "继续", "是"}
+                    _NO_INPUTS = {"no", "n", "否"}
+                    while True:
+                        choice = _read_console_input(logger=_log).strip().lower()
+                        if choice in _EXIT_CMDS:
+                            _log.info("用户主动退出，程序终止")
+                            raise SystemExit(0)
+                        if choice in _YES_INPUTS or choice in _NO_INPUTS:
+                            break
+                        print("请输入 yes 或 no（输入 quit 退出）：", end="", flush=True)
+                    user_answer = "yes" if choice in _YES_INPUTS else "no"
+                    if user_answer == "yes":
+                        print_system("用户授权继续，再给约一轮完整配额")
+                    else:
+                        print_system("用户选择结束迭代，以当前版本作为最终输出")
+                    payload = Command(resume=user_answer)
+
+                # ── 未知中断类型：安全兜底 ───────────────────────────────────
+                else:
+                    _log.warning("收到未知类型的 HIL 中断，自动以空字符串恢复")
+                    payload = Command(resume="")
+
+                break  # 退出本轮 astream，用新 payload 重新进入 while
+        finally:
+            await gen.aclose()
+
+        if not interrupted:
+            result = agent.get_state(config=thread_config).values
+            break
+
+    return result
+
+
+async def _async_main(
+    config,
+    requirement_filename: str,
+    output_filename_from_arg: str | None,
+    logger,
+) -> None:
+    """Agent 执行的异步主体。
+
+    异步加载 MCP 工具、创建 Agent、运行并输出结果。
+    从 main() 通过 asyncio.run() 调用。
+    """
+    # 9a. 加载 Context7 MCP 工具（若已启用）
+    context7_tools: list = []
+    if config.tools.context7.enabled:
+        from src.tools.context7_mcp import load_context7_tools
+        context7_tools = await load_context7_tools(
+            api_key_env=config.tools.context7.api_key_env,
+            url=config.tools.context7.url,
+        )
+
+    # 9b. 创建并运行 Agent
+    from src.agent_factory import create_orchestrator_agent
+
+    agent, orch_middleware = create_orchestrator_agent(
+        config, requirement_filename, context7_tools=context7_tools
+    )
+    print_system("Agent 创建完成，开始执行…")
+
+    initial_messages = [
+        {
+            "role": "user",
+            "content": (
+                f"请根据需求编写技术设计文档。"
+                f"需求文件在 /input/{requirement_filename}，"
+                f"同目录下的其他文件为参考文件，请按需阅读。"
+            ),
+        }
+    ]
+    thread_config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+
+    interactive = config.hil_clarify or config.hil_confirm
+    if interactive:
+        result = await _run_with_hil_async(agent, initial_messages, thread_config)
+    else:
+        result = await agent.ainvoke({"messages": initial_messages}, config=thread_config)
+
+    # 10. 确定输出文件名（三级降级：-o > drafts/output-filename.txt > design.md）
+    if output_filename_from_arg:
+        output_filename = sanitize_filename(output_filename_from_arg)
+        if output_filename != output_filename_from_arg:
+            logger.warning("输出文件名已清洗: %s -> %s", output_filename_from_arg, output_filename)
+    else:
+        suggested_path = Path("drafts/output-filename.txt")
+        if suggested_path.exists():
+            raw_suggested = suggested_path.read_text(encoding="utf-8")
+            output_filename = sanitize_filename(raw_suggested)
+            if output_filename != raw_suggested.strip():
+                logger.warning("LLM 建议的文件名已清洗: %s -> %s", repr(raw_suggested.strip()), output_filename)
+        else:
+            output_filename = "design.md"
+
+    output_filename = _stamp_filename(output_filename)
+
+    # 11. 复制最终产物到 ./output/
+    output_dir = Path("output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    drafts_path = Path("drafts/design.md")
+
+    if drafts_path.exists():
+        final_output_path = output_dir / output_filename
+        shutil.copy2(drafts_path, final_output_path)
+    else:
+        logger.error("Agent 运行完成但未找到 drafts/design.md，请检查 Writer 是否正常执行")
+
+    # 12. Agent 的迭代摘要（从后向前找第一条有实质文本的 AIMessage）
+    final_message = ""
+    if result and result.get("messages"):
+        for msg in reversed(result["messages"]):
+            if getattr(msg, "type", "") == "ai":
+                content = msg.content if hasattr(msg, "content") else ""
+                if isinstance(content, str) and content.strip():
+                    final_message = content
+                    break
+    if not final_message:
+        logger.warning("未找到 Orchestrator 的文本摘要（最后一条消息可能是工具回执）")
+
+    # 13. 最终摘要（rich 表格 + 面板）
+    print_final_summary(output_filename, orch_middleware.task_counts, final_message)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Writer-Reviewer Agent System (deepagents SDK)",
@@ -377,73 +597,12 @@ def main() -> None:
     drafts_dir = Path("drafts")
     _backup_drafts_contents(drafts_dir)
 
+    # 9-13. 异步执行 Agent（MCP 工具加载 + 运行 + 输出）
     try:
-        # 9. 创建并运行 Agent
-        from src.agent_factory import create_orchestrator_agent
-
-        agent, orch_middleware = create_orchestrator_agent(config, requirement_filename)
-        print_system("Agent 创建完成，开始执行…")
-
-        initial_messages = [
-            {
-                "role": "user",
-                "content": (
-                    f"请根据需求编写技术设计文档。"
-                    f"需求文件在 /input/{requirement_filename}，"
-                    f"同目录下的其他文件为参考文件，请按需阅读。"
-                ),
-            }
-        ]
-        thread_config = {"configurable": {"thread_id": str(uuid.uuid4())}}
-
-        interactive = config.hil_clarify or config.hil_confirm
-        if interactive:
-            result = _run_with_hil(agent, initial_messages, thread_config)
-        else:
-            result = agent.invoke({"messages": initial_messages}, config=thread_config)
-
-        # 10. 确定输出文件名（三级降级：-o > drafts/output-filename.txt > design.md）
-        if output_filename_from_arg:
-            output_filename = sanitize_filename(output_filename_from_arg)
-            if output_filename != output_filename_from_arg:
-                logger.warning("输出文件名已清洗: %s -> %s", output_filename_from_arg, output_filename)
-        else:
-            suggested_path = Path("drafts/output-filename.txt")
-            if suggested_path.exists():
-                raw_suggested = suggested_path.read_text(encoding="utf-8")
-                output_filename = sanitize_filename(raw_suggested)
-                if output_filename != raw_suggested.strip():
-                    logger.warning("LLM 建议的文件名已清洗: %s -> %s", repr(raw_suggested.strip()), output_filename)
-            else:
-                output_filename = "design.md"
-
-        output_filename = _stamp_filename(output_filename)
-
-        # 11. 复制最终产物到 ./output/
-        output_dir = Path("output")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        drafts_path = Path("drafts/design.md")
-
-        if drafts_path.exists():
-            final_output_path = output_dir / output_filename
-            shutil.copy2(drafts_path, final_output_path)
-        else:
-            logger.error("Agent 运行完成但未找到 drafts/design.md，请检查 Writer 是否正常执行")
-
-        # 12. Agent 的迭代摘要（从后向前找第一条有实质文本的 AIMessage）
-        final_message = ""
-        if result and result.get("messages"):
-            for msg in reversed(result["messages"]):
-                if getattr(msg, "type", "") == "ai":
-                    content = msg.content if hasattr(msg, "content") else ""
-                    if isinstance(content, str) and content.strip():
-                        final_message = content
-                        break
-        if not final_message:
-            logger.warning("未找到 Orchestrator 的文本摘要（最后一条消息可能是工具回执）")
-
-        # 13. 最终摘要（rich 表格 + 面板）
-        print_final_summary(output_filename, orch_middleware.task_counts, final_message)
+        asyncio.run(_async_main(config, requirement_filename, output_filename_from_arg, logger))
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)
     except SystemExit:
         raise
     except Exception:

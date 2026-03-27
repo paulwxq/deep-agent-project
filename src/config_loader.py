@@ -33,12 +33,22 @@ class AgentModelConfig:
 
 
 @dataclass
+class Context7Config:
+    """Context7 MCP 工具配置。"""
+
+    enabled: bool = False
+    api_key_env: str = "CONTEXT7_API_KEY"
+    url: str = "https://mcp.context7.com/mcp"
+
+
+@dataclass
 class ToolsConfig:
     """工具配置。"""
 
     tavily_enabled: bool = False
     tavily_api_key_env: str = "TAVILY_API_KEY"
     tavily_max_results: int = 5
+    context7: Context7Config = field(default_factory=Context7Config)
 
 
 @dataclass
@@ -131,11 +141,19 @@ def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
 
     # --- tools ---
     raw_tools = raw.get("tools", {})
+    if not isinstance(raw_tools, dict):
+        raw_tools = {}
     tavily_cfg = raw_tools.get("tavily", {}) if isinstance(raw_tools, dict) else {}
+    ctx7_cfg = raw_tools.get("context7", {}) if isinstance(raw_tools, dict) else {}
     tools = ToolsConfig(
         tavily_enabled=tavily_cfg.get("enabled", False),
         tavily_api_key_env=tavily_cfg.get("api_key_env", "TAVILY_API_KEY"),
         tavily_max_results=tavily_cfg.get("max_results", 5),
+        context7=Context7Config(
+            enabled=ctx7_cfg.get("enabled", False),
+            api_key_env=ctx7_cfg.get("api_key_env", "CONTEXT7_API_KEY"),
+            url=ctx7_cfg.get("url", "https://mcp.context7.com/mcp"),
+        ),
     )
 
     return AppConfig(
@@ -169,5 +187,9 @@ def validate_env_vars(config: AppConfig) -> list[str]:
     if config.tools.tavily_enabled:
         if not os.environ.get(config.tools.tavily_api_key_env):
             missing.append(config.tools.tavily_api_key_env)
+
+    if config.tools.context7.enabled:
+        if not os.environ.get(config.tools.context7.api_key_env):
+            missing.append(config.tools.context7.api_key_env)
 
     return missing

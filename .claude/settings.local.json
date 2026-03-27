@@ -26,7 +26,23 @@
       "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run python -c \"\nfrom src.rich_console import print_startup, print_task_delegation, print_reviewer_feedback, print_final_summary\nprint_startup\\('requirement.txt'\\)\nprint_task_delegation\\('orchestrator', 'writer', 1, '请根据需求文件撰写技术设计文档。\\\\n\\\\n需求文件路径：/input/requirement.txt'\\)\nprint_reviewer_feedback\\('VERDICT: REVISE\\\\n缺少数据血缘图的详细设计，建议补充第 4.3 节。'\\)\nprint_reviewer_feedback\\('VERDICT: ACCEPT\\\\n文档结构清晰，所有核心设计点均已覆盖。'\\)\nprint_final_summary\\('SAS数据血缘分析设计.md', {'writer': 2, 'reviewer': 2}, '共迭代 2 轮，第 2 轮 Reviewer 返回 ACCEPT。'\\)\n\")",
       "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run python -c \"import deepagents; print\\(deepagents.__version__\\)\" 2)",
       "Bash(1 UV_PROJECT_ENVIRONMENT=.venv-wsl uv run python -c \"import deepagents; help\\(deepagents.create_deep_agent\\)\")",
-      "WebFetch(domain:pypi.org)"
+      "WebFetch(domain:pypi.org)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run pytest tests/ -x -q)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run pytest tests/test_context7_mcp.py tests/test_config_loader.py tests/test_run_with_hil.py -v)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run pytest tests/test_context7_mcp.py -v)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run pytest tests/ -q)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run python - << 'EOF'\nimport asyncio\nfrom src.tools.context7_mcp import load_context7_tools\nfrom dotenv import load_dotenv\nload_dotenv\\(\".env\"\\)\n\nasync def main\\(\\):\n    tools = await load_context7_tools\\(\\)\n    print\\(f\"加载到 {len\\(tools\\)} 个工具：\"\\)\n    for t in tools:\n        print\\(f\"  - {t.name}\"\\)\n\nasyncio.run\\(main\\(\\)\\)\nEOF)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv add \"httpx[socks]\")",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run python - << 'EOF'\nimport asyncio\nfrom src.tools.context7_mcp import load_context7_tools\nfrom dotenv import load_dotenv\nload_dotenv\\(\".env\"\\)\n\nasync def main\\(\\):\n    tools = await load_context7_tools\\(\\)\n    print\\(f\"加载到 {len\\(tools\\)} 个工具：\"\\)\n    for t in tools:\n        print\\(f\"  - {t.name}: {t.description[:60]}...\"\\)\n\nasyncio.run\\(main\\(\\)\\)\nEOF)",
+      "Bash(UV_PROJECT_ENVIRONMENT=.venv-wsl uv run pytest tests/test_web_search.py -v)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(ls /mnt/c/Projects/cursor_2026/deep-agent-project/*.log)",
+      "Bash(source /mnt/c/Projects/cursor_2026/deep-agent-project/.venv-wsl/bin/activate)",
+      "Bash(python -c \"open\\(''/mnt/c/Projects/cursor_2026/deep-agent-project/logs/agent.log'', ''a''\\).close\\(\\); print\\(''OK''\\)\")",
+      "Bash(python -c \":*)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(.venv-wsl/bin/python -m pytest tests/ -x -q)"
     ]
   }
 }

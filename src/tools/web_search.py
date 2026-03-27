@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Literal
 
@@ -49,6 +50,6 @@ def create_web_search_tool(
             topic: 搜索主题类型
         """
         results = client.search(query, max_results=num_results, topic=topic)
-        return str(results)
+        return json.dumps(results, ensure_ascii=False)
 
     return internet_search
