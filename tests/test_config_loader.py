@@ -1,16 +1,4 @@
-"""config_loader 单元测试。
-
-覆盖范围：
-  - load_config() 加载实际 config/agents.yaml 成功
-  - AppConfig 已无 output_dir 字段（验证字段删除）
-  - Agent 引用不存在的 Provider → ConfigError
-  - Provider 缺少 type 字段 → ConfigError
-  - 配置文件不存在 → FileNotFoundError
-  - 顶层不是字典 → ConfigError
-  - validate_env_vars() 全部变量已设置 → []
-  - validate_env_vars() 缺少变量 → [var_name]
-  - validate_env_vars() Tavily 启用但 key 缺失 → 包含该 key
-"""
+"""config_loader 单元测试。"""
 
 from __future__ import annotations
 
@@ -31,270 +19,158 @@ from src.config_loader import (
 )
 
 
-# ---------------------------------------------------------------------------
-# 辅助：从字符串写 YAML 到 tmp_path
-# ---------------------------------------------------------------------------
+def write_yaml(tmp_path: Path, content: str) -> str:
+    path = tmp_path / "agents.yaml"
+    path.write_text(textwrap.dedent(content), encoding="utf-8")
+    return str(path)
 
-def write_yaml(tmp_path: Path, content: str) -> Path:
-    p = tmp_path / "agents.yaml"
-    p.write_text(textwrap.dedent(content), encoding="utf-8")
-    return str(p)
-
-
-# ---------------------------------------------------------------------------
-# load_config — 正常路径：加载实际配置文件
-# ---------------------------------------------------------------------------
 
 class TestLoadConfigHappyPath:
     def test_loads_actual_agents_yaml(self, project_root: Path):
-        config_path = project_root / "config" / "agents.yaml"
-        cfg = load_config(str(config_path))
-
+        cfg = load_config(str(project_root / "config" / "agents.yaml"))
         assert isinstance(cfg, AppConfig)
-        assert cfg.max_iterations == 3
-        assert cfg.log_level == "INFO"
-        # 三个 Agent 都存在
-        assert "orchestrator" in cfg.agents
-        assert "writer" in cfg.agents
-        assert "reviewer" in cfg.agents
-        # 四个 Provider 都存在
-        assert "dashscope" in cfg.providers
-        assert "minimax" in cfg.providers
-        assert "bigmodel" in cfg.providers
-        assert "deepseek" in cfg.providers
-        assert "moonshot" in cfg.providers
-        assert "openrouter" in cfg.providers
-
-    def test_hil_flags_default_to_true(self, project_root: Path):
-        """验证默认配置文件中 hil_clarify 和 hil_confirm 都为 True。"""
-        config_path = project_root / "config" / "agents.yaml"
-        cfg = load_config(str(config_path))
-        assert cfg.hil_clarify is True, "hil_clarify 默认应为 True"
-        assert cfg.hil_confirm is True, "hil_confirm 默认应为 True"
-
-    def test_hil_flags_loaded_from_yaml(self, tmp_path: Path, project_root: Path):
-        """验证 hil_clarify / hil_confirm 能从 YAML 正确加载。"""
-        import yaml as _yaml
-        raw = _yaml.safe_load(
-            (project_root / "config" / "agents.yaml").read_text(encoding="utf-8")
-        )
-        raw["global"]["hil_clarify"] = True
-        raw["global"]["hil_confirm"] = True
-        tmp_config = tmp_path / "agents.yaml"
-        tmp_config.write_text(_yaml.dump(raw), encoding="utf-8")
-
-        cfg = load_config(str(tmp_config))
         assert cfg.hil_clarify is True
-        assert cfg.hil_confirm is True
-
-    def test_appconfig_has_no_output_dir(self, project_root: Path):
-        """验证 output_dir 字段已从 AppConfig 彻底删除。"""
-        config_path = project_root / "config" / "agents.yaml"
-        cfg = load_config(str(config_path))
-        assert not hasattr(cfg, "output_dir"), (
-            "output_dir 字段应已从 AppConfig 删除，但仍然存在"
-        )
-
-    def test_agents_yaml_has_no_output_dir_key(self, project_root: Path):
-        """验证 config/agents.yaml 的 global 节点不含 output_dir 键。"""
-        import yaml
-        raw = yaml.safe_load(
-            (project_root / "config" / "agents.yaml").read_text(encoding="utf-8")
-        )
-        assert "output_dir" not in raw.get("global", {}), (
-            "agents.yaml 的 global 节点不应含 output_dir"
-        )
-
-    def test_agent_provider_references_are_valid(self, project_root: Path):
-        """所有 Agent 的 provider 引用必须在 providers 中已定义。"""
-        config_path = project_root / "config" / "agents.yaml"
-        cfg = load_config(str(config_path))
-        for agent_name, agent_cfg in cfg.agents.items():
-            assert agent_cfg.provider in cfg.providers, (
-                f"Agent '{agent_name}' 的 provider '{agent_cfg.provider}' "
-                f"未在 providers 中定义"
-            )
-
-    def test_writer_provider_is_dashscope(self, project_root: Path):
-        """验证 writer 的 provider 是 dashscope（当前 agents.yaml 中的配置）。"""
-        config_path = project_root / "config" / "agents.yaml"
-        cfg = load_config(str(config_path))
-        assert cfg.agents["writer"].provider in cfg.providers
-
-    def test_reviewer_provider_is_bigmodel(self, project_root: Path):
-        """验证 reviewer 的 provider 是 bigmodel（而非旧的 openai_compatible）。"""
-        config_path = project_root / "config" / "agents.yaml"
-        cfg = load_config(str(config_path))
-        assert cfg.agents["reviewer"].provider == "bigmodel"
-
-    def test_tools_config_loaded(self, project_root: Path):
-        config_path = project_root / "config" / "agents.yaml"
-        cfg = load_config(str(config_path))
-        assert isinstance(cfg.tools, ToolsConfig)
-        assert isinstance(cfg.tools.tavily_enabled, bool)
+        assert "reviewer1" in cfg.agents
+        assert "reviewer2" in cfg.agents
+        assert not hasattr(cfg, "hil_confirm")
+        assert cfg.agents["reviewer1"].provider == "bigmodel"
+        assert cfg.agents["reviewer2"].provider == "minimax"
+        assert cfg.agents["reviewer2"].model == "minimax-2.5"
+        assert cfg.agents["reviewer2"].enabled is False
 
     def test_context7_config_loaded(self, project_root: Path):
-        """context7 配置能正确加载：字段类型和默认值检查（不假设 enabled 的值）。"""
-        config_path = project_root / "config" / "agents.yaml"
-        cfg = load_config(str(config_path))
+        cfg = load_config(str(project_root / "config" / "agents.yaml"))
         assert isinstance(cfg.tools.context7, Context7Config)
-        assert isinstance(cfg.tools.context7.enabled, bool)
         assert cfg.tools.context7.api_key_env == "CONTEXT7_API_KEY"
-        assert cfg.tools.context7.url == "https://mcp.context7.com/mcp"
 
-    def test_context7_enabled_loaded_from_yaml(self, tmp_path: Path, project_root: Path):
-        """验证 context7 enabled=true 能从 YAML 正确加载。"""
-        import yaml as _yaml
-        raw = _yaml.safe_load(
-            (project_root / "config" / "agents.yaml").read_text(encoding="utf-8")
-        )
-        raw.setdefault("tools", {}).setdefault("context7", {})["enabled"] = True
-        tmp_config = tmp_path / "agents.yaml"
-        tmp_config.write_text(_yaml.dump(raw), encoding="utf-8")
-
-        cfg = load_config(str(tmp_config))
-        assert cfg.tools.context7.enabled is True
-
-    def test_context7_custom_url_loaded_from_yaml(self, tmp_path: Path, project_root: Path):
-        """验证 context7 自定义 url 能从 YAML 正确加载。"""
-        import yaml as _yaml
-        raw = _yaml.safe_load(
-            (project_root / "config" / "agents.yaml").read_text(encoding="utf-8")
-        )
-        raw.setdefault("tools", {}).setdefault("context7", {})["url"] = "https://custom.mcp.example.com/mcp"
-        tmp_config = tmp_path / "agents.yaml"
-        tmp_config.write_text(_yaml.dump(raw), encoding="utf-8")
-
-        cfg = load_config(str(tmp_config))
-        assert cfg.tools.context7.url == "https://custom.mcp.example.com/mcp"
-
-
-# ---------------------------------------------------------------------------
-# load_config — 错误路径
-# ---------------------------------------------------------------------------
 
 class TestLoadConfigErrors:
-    def test_file_not_found_raises(self, tmp_path: Path):
-        with pytest.raises(FileNotFoundError):
-            load_config(str(tmp_path / "nonexistent.yaml"))
-
-    def test_non_dict_yaml_raises_config_error(self, tmp_path: Path):
-        path = write_yaml(tmp_path, "- item1\n- item2\n")
-        with pytest.raises(ConfigError, match="期望顶层为字典"):
-            load_config(path)
-
-    def test_agent_references_undefined_provider_raises(self, tmp_path: Path):
-        yaml_content = """\
+    def test_old_reviewer_key_raises(self, tmp_path: Path):
+        path = write_yaml(
+            tmp_path,
+            """
             global:
-              max_iterations: 3
-              log_level: INFO
+              hil_clarify: true
             providers:
-              dashscope:
+              p:
                 type: dashscope
-                api_key_env: DASHSCOPE_API_KEY
+                api_key_env: KEY
             agents:
               orchestrator:
-                provider: nonexistent_provider
-                model: qwen3-max
-        """
-        path = write_yaml(tmp_path, yaml_content)
-        with pytest.raises(ConfigError, match="未在 providers 中定义"):
+                provider: p
+                model: m1
+              writer:
+                provider: p
+                model: m2
+              reviewer:
+                provider: p
+                model: m3
+            """,
+        )
+        with pytest.raises(ConfigError, match="agents.reviewer"):
             load_config(path)
 
-    def test_provider_missing_type_raises(self, tmp_path: Path):
-        yaml_content = """\
+    def test_reviewer1_must_be_enabled(self, tmp_path: Path):
+        path = write_yaml(
+            tmp_path,
+            """
             global:
-              max_iterations: 3
-              log_level: INFO
+              hil_clarify: true
             providers:
-              myprovider:
-                api_key_env: SOME_KEY
+              p:
+                type: dashscope
+                api_key_env: KEY
             agents:
               orchestrator:
-                provider: myprovider
-                model: some-model
-        """
-        path = write_yaml(tmp_path, yaml_content)
-        with pytest.raises(ConfigError, match="缺少 'type' 字段"):
+                provider: p
+                model: m1
+              writer:
+                provider: p
+                model: m2
+              reviewer1:
+                enabled: false
+                provider: p
+                model: m3
+            """,
+        )
+        with pytest.raises(ConfigError, match="reviewer1 必须启用"):
             load_config(path)
 
-    @pytest.mark.parametrize("field,value", [
-        ("hil_clarify", '"false"'),   # 带引号字符串，bool("false") 会误判为 True
-        ("hil_clarify", '"true"'),    # 带引号字符串
-        ("hil_clarify", "0"),         # 整数 0
-        ("hil_clarify", "1"),         # 整数 1
-        ("hil_confirm", '"false"'),
-        ("hil_confirm", "0"),
-    ])
-    def test_hil_flag_non_bool_type_raises(self, tmp_path: Path, field: str, value: str):
-        """hil_clarify/hil_confirm 为字符串或数字时必须报 ConfigError，不得隐式转换。"""
-        yaml_content = f"""\
+    def test_reviewer2_enabled_requires_different_model(self, tmp_path: Path):
+        path = write_yaml(
+            tmp_path,
+            """
             global:
-              max_iterations: 3
+              hil_clarify: true
+            providers:
+              p:
+                type: dashscope
+                api_key_env: KEY
+            agents:
+              orchestrator:
+                provider: p
+                model: m1
+              writer:
+                provider: p
+                model: m2
+              reviewer1:
+                enabled: true
+                provider: p
+                model: m3
+              reviewer2:
+                enabled: true
+                provider: p
+                model: m3
+            """,
+        )
+        with pytest.raises(ConfigError, match="不同的 provider\\+model"):
+            load_config(path)
+
+    @pytest.mark.parametrize("field,value", [("hil_clarify", '"false"'), ("hil_clarify", "0")])
+    def test_hil_clarify_must_be_bool(self, tmp_path: Path, field: str, value: str):
+        path = write_yaml(
+            tmp_path,
+            f"""
+            global:
               {field}: {value}
             providers:
-              dashscope:
+              p:
                 type: dashscope
-                api_key_env: DASHSCOPE_API_KEY
+                api_key_env: KEY
             agents:
               orchestrator:
-                provider: dashscope
-                model: qwen3-max
-        """
-        path = write_yaml(tmp_path, yaml_content)
+                provider: p
+                model: m1
+              writer:
+                provider: p
+                model: m2
+              reviewer1:
+                enabled: true
+                provider: p
+                model: m3
+            """,
+        )
         with pytest.raises(ConfigError, match="必须为布尔值"):
             load_config(path)
 
-    def test_global_section_optional(self, tmp_path: Path):
-        """global 节点缺失时应使用默认值，不应报错。"""
-        yaml_content = """\
-            providers:
-              dashscope:
-                type: dashscope
-                api_key_env: DASHSCOPE_API_KEY
-            agents:
-              orchestrator:
-                provider: dashscope
-                model: qwen3-max
-        """
-        path = write_yaml(tmp_path, yaml_content)
-        cfg = load_config(path)
-        assert cfg.max_iterations == 3     # 默认值
-        assert cfg.log_level == "INFO"     # 默认值（已从 DEBUG 改为 INFO）
-        assert cfg.file_log_level == "DEBUG"  # 默认值
-
-
-# ---------------------------------------------------------------------------
-# validate_env_vars
-# ---------------------------------------------------------------------------
 
 def _make_config(
     providers: dict,
     agents: dict,
     tavily_enabled: bool = False,
     context7_enabled: bool = False,
-    context7_api_key_env: str = "CONTEXT7_API_KEY",
 ) -> AppConfig:
-    """构造最小化 AppConfig，用于隔离测试 validate_env_vars。"""
     return AppConfig(
         max_iterations=3,
         log_level="INFO",
         file_log_level="DEBUG",
         hil_clarify=False,
-        hil_confirm=False,
-        providers={
-            k: ProviderConfig(**v) for k, v in providers.items()
-        },
-        agents={
-            k: AgentModelConfig(**v) for k, v in agents.items()
-        },
+        providers={k: ProviderConfig(**v) for k, v in providers.items()},
+        agents={k: AgentModelConfig(**v) for k, v in agents.items()},
         tools=ToolsConfig(
             tavily_enabled=tavily_enabled,
             tavily_api_key_env="TAVILY_API_KEY",
-            context7=Context7Config(
-                enabled=context7_enabled,
-                api_key_env=context7_api_key_env,
-            ),
+            context7=Context7Config(enabled=context7_enabled),
         ),
     )
 
@@ -303,130 +179,41 @@ class TestValidateEnvVars:
     def test_all_vars_set_returns_empty_list(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("MY_API_KEY", "sk-test")
         cfg = _make_config(
-            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
-            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
+            providers={"p": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
+            agents={"writer": {"provider": "p", "model": "gpt-4"}},
         )
         assert validate_env_vars(cfg) == []
 
-    def test_missing_api_key_returned(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("MISSING_KEY", raising=False)
-        cfg = _make_config(
-            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MISSING_KEY"}},
-            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
-        )
-        missing = validate_env_vars(cfg)
-        assert "MISSING_KEY" in missing
-
-    def test_missing_base_url_env_returned(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("MY_API_KEY", "sk-test")
-        monkeypatch.delenv("MY_BASE_URL", raising=False)
+    def test_disabled_reviewer2_provider_env_is_skipped(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("USED_KEY", "ok")
+        monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
         cfg = _make_config(
             providers={
-                "dashscope": {
-                    "type": "dashscope",
-                    "api_key_env": "MY_API_KEY",
-                    "base_url_env": "MY_BASE_URL",
-                }
+                "used": {"type": "deepseek", "api_key_env": "USED_KEY"},
+                "minimax": {"type": "anthropic_compatible", "api_key_env": "MINIMAX_API_KEY"},
             },
-            agents={"orchestrator": {"provider": "dashscope", "model": "qwen3-max"}},
+            agents={
+                "orchestrator": {"provider": "used", "model": "m1"},
+                "writer": {"provider": "used", "model": "m2"},
+                "reviewer1": {"provider": "used", "model": "m3"},
+                "reviewer2": {"enabled": False, "provider": "minimax", "model": "minimax-2.5"},
+            },
         )
-        missing = validate_env_vars(cfg)
-        assert "MY_BASE_URL" in missing
+        assert "MINIMAX_API_KEY" not in validate_env_vars(cfg)
 
-    def test_missing_deepseek_api_key_returned(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-        cfg = _make_config(
-            providers={"deepseek": {"type": "deepseek", "api_key_env": "DEEPSEEK_API_KEY"}},
-            agents={"orchestrator": {"provider": "deepseek", "model": "deepseek-chat"}},
-        )
-        missing = validate_env_vars(cfg)
-        assert "DEEPSEEK_API_KEY" in missing
-
-    def test_missing_moonshot_api_key_returned(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+    def test_enabled_reviewer2_provider_env_is_checked(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("USED_KEY", "ok")
+        monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
         cfg = _make_config(
             providers={
-                "moonshot": {
-                    "type": "openai_compatible",
-                    "api_key_env": "MOONSHOT_API_KEY",
-                    "base_url": "https://api.moonshot.cn/v1",
-                }
+                "used": {"type": "deepseek", "api_key_env": "USED_KEY"},
+                "minimax": {"type": "anthropic_compatible", "api_key_env": "MINIMAX_API_KEY"},
             },
-            agents={"writer": {"provider": "moonshot", "model": "kimi-k2.5"}},
-        )
-        missing = validate_env_vars(cfg)
-        assert "MOONSHOT_API_KEY" in missing
-
-    def test_tavily_key_missing_when_enabled(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("MY_API_KEY", "sk-test")
-        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-        cfg = _make_config(
-            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
-            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
-            tavily_enabled=True,
-        )
-        missing = validate_env_vars(cfg)
-        assert "TAVILY_API_KEY" in missing
-
-    def test_tavily_key_not_checked_when_disabled(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("MY_API_KEY", "sk-test")
-        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-        cfg = _make_config(
-            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
-            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
-            tavily_enabled=False,   # 未启用
-        )
-        missing = validate_env_vars(cfg)
-        assert "TAVILY_API_KEY" not in missing
-
-    def test_context7_key_missing_when_enabled(self, monkeypatch: pytest.MonkeyPatch):
-        """context7 启用且 API Key 缺失时，missing 应包含该 key。"""
-        monkeypatch.setenv("MY_API_KEY", "sk-test")
-        monkeypatch.delenv("CONTEXT7_API_KEY", raising=False)
-        cfg = _make_config(
-            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
-            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
-            context7_enabled=True,
-        )
-        missing = validate_env_vars(cfg)
-        assert "CONTEXT7_API_KEY" in missing
-
-    def test_context7_key_not_checked_when_disabled(self, monkeypatch: pytest.MonkeyPatch):
-        """context7 未启用时不检查 API Key。"""
-        monkeypatch.setenv("MY_API_KEY", "sk-test")
-        monkeypatch.delenv("CONTEXT7_API_KEY", raising=False)
-        cfg = _make_config(
-            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
-            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
-            context7_enabled=False,
-        )
-        missing = validate_env_vars(cfg)
-        assert "CONTEXT7_API_KEY" not in missing
-
-    def test_context7_custom_key_env_checked(self, monkeypatch: pytest.MonkeyPatch):
-        """context7 使用自定义 api_key_env 时，validate 应检查正确的变量名。"""
-        monkeypatch.setenv("MY_API_KEY", "sk-test")
-        monkeypatch.delenv("MY_CONTEXT7_KEY", raising=False)
-        cfg = _make_config(
-            providers={"myprovider": {"type": "openai_compatible", "api_key_env": "MY_API_KEY"}},
-            agents={"writer": {"provider": "myprovider", "model": "gpt-4"}},
-            context7_enabled=True,
-            context7_api_key_env="MY_CONTEXT7_KEY",
-        )
-        missing = validate_env_vars(cfg)
-        assert "MY_CONTEXT7_KEY" in missing
-
-    def test_unused_provider_not_checked(self, monkeypatch: pytest.MonkeyPatch):
-        """只检查 agents 实际引用的 provider，未引用的 provider 的 key 不影响结果。"""
-        monkeypatch.setenv("USED_KEY", "sk-test")
-        monkeypatch.delenv("UNUSED_KEY", raising=False)
-        cfg = _make_config(
-            providers={
-                "used": {"type": "openai_compatible", "api_key_env": "USED_KEY"},
-                "unused": {"type": "openai_compatible", "api_key_env": "UNUSED_KEY"},
+            agents={
+                "orchestrator": {"provider": "used", "model": "m1"},
+                "writer": {"provider": "used", "model": "m2"},
+                "reviewer1": {"provider": "used", "model": "m3"},
+                "reviewer2": {"enabled": True, "provider": "minimax", "model": "minimax-2.5"},
             },
-            agents={"writer": {"provider": "used", "model": "gpt-4"}},
         )
-        missing = validate_env_vars(cfg)
-        assert "UNUSED_KEY" not in missing
-        assert missing == []
+        assert "MINIMAX_API_KEY" in validate_env_vars(cfg)

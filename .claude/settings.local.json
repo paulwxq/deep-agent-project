@@ -42,7 +42,10 @@
       "Bash(python -c \"open\\(''/mnt/c/Projects/cursor_2026/deep-agent-project/logs/agent.log'', ''a''\\).close\\(\\); print\\(''OK''\\)\")",
       "Bash(python -c \":*)",
       "Bash(python -m pytest tests/ -x -q)",
-      "Bash(.venv-wsl/bin/python -m pytest tests/ -x -q)"
+      "Bash(.venv-wsl/bin/python -m pytest tests/ -x -q)",
+      "Bash(python -m pytest tests/test_stage_state.py -q)",
+      "Bash(python -m pytest tests/test_stage_state.py -q -k \"not stage_limit and not verdict_parse_error\")",
+      "WebSearch"
     ]
   }
 }

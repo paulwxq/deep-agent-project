@@ -1,7 +1,7 @@
 """YAML 配置加载与校验模块。
 
 从 config/agents.yaml 加载 Provider、Agent 模型和工具配置，
-并校验 Provider 引用和环境变量是否就绪。
+并校验双阶段 reviewer 配置与环境变量是否就绪。
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import yaml
 class ProviderConfig:
     """模型提供商配置。"""
 
-    type: str  # "dashscope" | "anthropic_compatible" | "openai_compatible" | "deepseek" | "openrouter"
+    type: str
     api_key_env: str
     base_url: str | None = None
     base_url_env: str | None = None
@@ -27,8 +27,10 @@ class ProviderConfig:
 class AgentModelConfig:
     """单个 Agent 的模型配置。"""
 
-    provider: str
-    model: str
+    enabled: bool = True
+    provider: str = ""
+    model: str = ""
+    max_reviewer_iterations: int = 3
     params: dict = field(default_factory=dict)
 
 
@@ -59,7 +61,6 @@ class AppConfig:
     log_level: str
     file_log_level: str
     hil_clarify: bool
-    hil_confirm: bool
     providers: dict[str, ProviderConfig]
     agents: dict[str, AgentModelConfig]
     tools: ToolsConfig
@@ -70,12 +71,7 @@ class ConfigError(Exception):
 
 
 def _require_bool(value: object, field_name: str) -> bool:
-    """确保 YAML 字段是原生布尔值，拒绝字符串/数字等容易误判的类型。
-
-    YAML 中不带引号的 true/false 会被 safe_load 解析为 Python bool，
-    带引号的 "true"/"false" 则是 str——直接 bool("false") 会返回 True，
-    因此必须严格校验类型而非隐式转换。
-    """
+    """确保 YAML 字段是原生布尔值。"""
     if not isinstance(value, bool):
         raise ConfigError(
             f"配置字段 '{field_name}' 必须为布尔值（YAML 原生 true/false），"
@@ -84,13 +80,30 @@ def _require_bool(value: object, field_name: str) -> bool:
     return value
 
 
-def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
-    """加载并校验 YAML 配置文件。
+def _validate_enabled_agent(
+    agent_name: str,
+    agent_cfg: AgentModelConfig,
+    providers: dict[str, ProviderConfig],
+) -> None:
+    """校验启用中的 agent 配置。"""
+    if not agent_cfg.provider:
+        raise ConfigError(f"Agent '{agent_name}' 缺少 provider 配置")
+    if not agent_cfg.model:
+        raise ConfigError(f"Agent '{agent_name}' 缺少 model 配置")
+    if agent_cfg.provider not in providers:
+        raise ConfigError(
+            f"Agent '{agent_name}' 引用的 Provider '{agent_cfg.provider}' 未在 providers 中定义"
+        )
 
-    Raises:
-        ConfigError: 配置文件缺失、格式错误或引用的 Provider 未定义。
-        FileNotFoundError: 配置文件不存在。
-    """
+
+def _validate_positive_int(value: object, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ConfigError(f"配置字段 '{field_name}' 必须为正整数（当前值: {value!r}）")
+    return value
+
+
+def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
+    """加载并校验 YAML 配置文件。"""
     path = Path(config_path)
     if not path.exists():
         raise FileNotFoundError(f"配置文件不存在: {path.resolve()}")
@@ -101,15 +114,12 @@ def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
     if not isinstance(raw, dict):
         raise ConfigError(f"配置文件格式错误，期望顶层为字典: {config_path}")
 
-    # --- global ---
     global_cfg = raw.get("global", {})
     max_iterations = global_cfg.get("max_iterations", 3)
     log_level = global_cfg.get("log_level", "INFO")
     file_log_level = global_cfg.get("file_log_level", "DEBUG")
     hil_clarify = _require_bool(global_cfg.get("hil_clarify", False), "hil_clarify")
-    hil_confirm = _require_bool(global_cfg.get("hil_confirm", False), "hil_confirm")
 
-    # --- providers ---
     raw_providers = raw.get("providers", {})
     providers: dict[str, ProviderConfig] = {}
     for name, pcfg in raw_providers.items():
@@ -122,24 +132,53 @@ def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
             base_url_env=pcfg.get("base_url_env"),
         )
 
-    # --- agents ---
     raw_agents = raw.get("agents", {})
+    if "reviewer" in raw_agents and "reviewer1" not in raw_agents:
+        raise ConfigError(
+            "检测到旧配置键 'agents.reviewer'。请手动重命名为 'agents.reviewer1'，"
+            "并按需新增可选的 'agents.reviewer2'。"
+        )
+
     agents: dict[str, AgentModelConfig] = {}
     for name, acfg in raw_agents.items():
         if not isinstance(acfg, dict):
             raise ConfigError(f"Agent '{name}' 配置格式错误")
-        provider_name = acfg.get("provider", "")
-        if provider_name not in providers:
-            raise ConfigError(
-                f"Agent '{name}' 引用的 Provider '{provider_name}' 未在 providers 中定义"
-            )
         agents[name] = AgentModelConfig(
-            provider=provider_name,
+            enabled=_require_bool(acfg.get("enabled", True), f"agents.{name}.enabled"),
+            provider=acfg.get("provider", ""),
             model=acfg.get("model", ""),
+            max_reviewer_iterations=acfg.get("max_reviewer_iterations", 3),
             params=acfg.get("params", {}),
         )
 
-    # --- tools ---
+    for required_agent in ("orchestrator", "writer", "reviewer1"):
+        if required_agent not in agents:
+            raise ConfigError(f"缺少必需的 Agent 配置: '{required_agent}'")
+
+    if not agents["reviewer1"].enabled:
+        raise ConfigError("reviewer1 必须启用（agents.reviewer1.enabled 必须为 true）")
+
+    reviewer2_cfg = agents.get("reviewer2")
+    for agent_name in ("orchestrator", "writer", "reviewer1"):
+        _validate_enabled_agent(agent_name, agents[agent_name], providers)
+
+    for reviewer_name in ("reviewer1", "reviewer2"):
+        reviewer_cfg = agents.get(reviewer_name)
+        if reviewer_cfg is None or not reviewer_cfg.enabled:
+            continue
+        reviewer_cfg.max_reviewer_iterations = _validate_positive_int(
+            reviewer_cfg.max_reviewer_iterations,
+            f"agents.{reviewer_name}.max_reviewer_iterations",
+        )
+        _validate_enabled_agent(reviewer_name, reviewer_cfg, providers)
+
+    if reviewer2_cfg and reviewer2_cfg.enabled:
+        if (
+            reviewer2_cfg.provider == agents["reviewer1"].provider
+            and reviewer2_cfg.model == agents["reviewer1"].model
+        ):
+            raise ConfigError("reviewer2 启用时，必须与 reviewer1 使用不同的 provider+model 组合")
+
     raw_tools = raw.get("tools", {})
     if not isinstance(raw_tools, dict):
         raw_tools = {}
@@ -161,7 +200,6 @@ def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
         log_level=log_level,
         file_log_level=file_log_level,
         hil_clarify=hil_clarify,
-        hil_confirm=hil_confirm,
         providers=providers,
         agents=agents,
         tools=tools,
@@ -169,14 +207,14 @@ def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
 
 
 def validate_env_vars(config: AppConfig) -> list[str]:
-    """检查配置中引用的环境变量是否已设置。
-
-    Returns:
-        缺失的环境变量名列表（空列表表示全部就绪）。
-    """
+    """检查配置中引用的环境变量是否已设置。"""
     missing: list[str] = []
 
-    used_providers = {a.provider for a in config.agents.values()}
+    used_providers = {
+        agent_cfg.provider
+        for agent_cfg in config.agents.values()
+        if agent_cfg.enabled and agent_cfg.provider
+    }
     for provider_name in used_providers:
         pcfg = config.providers[provider_name]
         if pcfg.api_key_env and not os.environ.get(pcfg.api_key_env):
@@ -184,12 +222,10 @@ def validate_env_vars(config: AppConfig) -> list[str]:
         if pcfg.base_url_env and not os.environ.get(pcfg.base_url_env):
             missing.append(pcfg.base_url_env)
 
-    if config.tools.tavily_enabled:
-        if not os.environ.get(config.tools.tavily_api_key_env):
-            missing.append(config.tools.tavily_api_key_env)
+    if config.tools.tavily_enabled and not os.environ.get(config.tools.tavily_api_key_env):
+        missing.append(config.tools.tavily_api_key_env)
 
-    if config.tools.context7.enabled:
-        if not os.environ.get(config.tools.context7.api_key_env):
-            missing.append(config.tools.context7.api_key_env)
+    if config.tools.context7.enabled and not os.environ.get(config.tools.context7.api_key_env):
+        missing.append(config.tools.context7.api_key_env)
 
     return missing

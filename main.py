@@ -445,7 +445,7 @@ async def _async_main(
     ]
     thread_config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
-    interactive = config.hil_clarify or config.hil_confirm
+    interactive = True
     if interactive:
         result = await _run_with_hil_async(agent, initial_messages, thread_config)
     else:
@@ -510,7 +510,7 @@ def main() -> None:
     parser.add_argument("-l", "--log-level", default=None,
                         help="Log level (DEBUG/INFO/WARNING/ERROR)")
     parser.add_argument("-i", "--interactive", action="store_true",
-                        help="开启交互模式：等效于同时将 hil_clarify 和 hil_confirm 设为 True，优先级高于配置文件")
+                        help="开启交互模式：当前双阶段审核架构固定为交互式；该参数仅保留兼容语义")
     args = parser.parse_args()
 
     # 1. 解析 -f/-o，收集延迟告警（此时 logger 尚未初始化）
@@ -566,7 +566,6 @@ def main() -> None:
         config.log_level = args.log_level
     if args.interactive:
         config.hil_clarify = True
-        config.hil_confirm = True
 
     # 用配置中的最终级别重新设置文件 handler 级别；控制台固定 WARNING，由 rich 接管显示
     logger = setup_logger("WARNING", config.file_log_level)

@@ -1,8 +1,4 @@
-"""Agent 工厂模块。
-
-根据配置创建完整的 Orchestrator Agent，包含 Writer/Reviewer 子代理定义、
-工具集成和日志中间件。
-"""
+"""Agent 工厂模块。"""
 
 from __future__ import annotations
 
@@ -17,6 +13,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from src.config_loader import AppConfig
 from src.middleware.logging_middleware import LoggingMiddleware
+from src.middleware.stage_state import StageStateMiddleware
 from src.model_factory import create_model
 from src.prompts.orchestrator_prompt import build_orchestrator_prompt
 from src.prompts.reviewer_prompt import build_reviewer_prompt
@@ -27,36 +24,30 @@ logger = logging.getLogger("deep_agent_project")
 
 
 def _log_skills_config(agent_name: str, skill_dirs: list[str]) -> None:
-    """扫描 skills 目录，确认技能已正确配置并可被 SDK 发现。"""
     for skill_dir in skill_dirs:
         actual_path = Path(skill_dir.lstrip("/"))
         if not actual_path.exists():
             logger.warning(
                 "技能目录不存在 [%s]: %s（该 Agent 将无技能可用）",
-                agent_name, skill_dir,
+                agent_name,
+                skill_dir,
                 extra={"agent_name": "system"},
             )
             continue
         skill_names = sorted(
-            d.name for d in actual_path.iterdir()
-            if d.is_dir() and (d / "SKILL.md").exists()
+            d.name for d in actual_path.iterdir() if d.is_dir() and (d / "SKILL.md").exists()
         )
         if skill_names:
             logger.debug(
                 "技能配置 [%s]: 目录=%s → 发现技能 %s",
-                agent_name, skill_dir, skill_names,
-                extra={"agent_name": "system"},
-            )
-        else:
-            logger.warning(
-                "技能目录为空或无 SKILL.md [%s]: %s",
-                agent_name, skill_dir,
+                agent_name,
+                skill_dir,
+                skill_names,
                 extra={"agent_name": "system"},
             )
 
 
 def _log_agent_model_config(config: AppConfig, agent_name: str) -> None:
-    """记录 Agent 的模型配置，便于排查 provider / model / thinking 参数问题。"""
     agent_cfg = config.agents[agent_name]
     provider_cfg = config.providers[agent_cfg.provider]
     params_text = json.dumps(agent_cfg.params, ensure_ascii=False, sort_keys=True)
@@ -71,27 +62,39 @@ def _log_agent_model_config(config: AppConfig, agent_name: str) -> None:
     )
 
 
+def _ensure_review_state(state_path: Path, reviewer2_enabled: bool) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    if state_path.exists():
+        return
+    state_path.write_text(
+        json.dumps(
+            {
+                "current_stage": "reviewer1",
+                "reviewer1_round": 0,
+                "reviewer2_round": 0,
+                "reviewer2_enabled": reviewer2_enabled,
+                "awaiting_confirm_for": None,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 def create_orchestrator_agent(
     config: AppConfig,
     requirement_filename: str = "requirement.txt",
     context7_tools: list | None = None,
 ) -> tuple[CompiledStateGraph, LoggingMiddleware]:
-    """根据配置创建完整的 Orchestrator Agent。
+    """根据配置创建完整的 Orchestrator Agent。"""
+    reviewer2_enabled = bool(config.agents.get("reviewer2") and config.agents["reviewer2"].enabled)
 
-    Args:
-        config: 应用全局配置。
-        requirement_filename: 需求文件名，用于构建提示词中的路径提示。
-        context7_tools: 已加载的 Context7 MCP 工具列表（异步加载后传入）。
+    for agent_name in ("orchestrator", "writer", "reviewer1"):
+        _log_agent_model_config(config, agent_name)
+    if reviewer2_enabled:
+        _log_agent_model_config(config, "reviewer2")
 
-    Returns:
-        (agent, orch_middleware) — agent 图实例与 Orchestrator 的日志中间件。
-        调用方可通过 orch_middleware.task_counts 获取子代理委派统计。
-    """
-    _log_agent_model_config(config, "orchestrator")
-    _log_agent_model_config(config, "writer")
-    _log_agent_model_config(config, "reviewer")
-
-    # 1. 通过模型工厂创建各 Agent 的模型实例
     orchestrator_model = create_model(
         config.providers[config.agents["orchestrator"].provider],
         config.agents["orchestrator"],
@@ -100,12 +103,17 @@ def create_orchestrator_agent(
         config.providers[config.agents["writer"].provider],
         config.agents["writer"],
     )
-    reviewer_model = create_model(
-        config.providers[config.agents["reviewer"].provider],
-        config.agents["reviewer"],
+    reviewer1_model = create_model(
+        config.providers[config.agents["reviewer1"].provider],
+        config.agents["reviewer1"],
     )
+    reviewer2_model = None
+    if reviewer2_enabled:
+        reviewer2_model = create_model(
+            config.providers[config.agents["reviewer2"].provider],
+            config.agents["reviewer2"],
+        )
 
-    # 2. 构建可选工具列表
     context7_tools = context7_tools or []
     context7_tool_names = [t.name for t in context7_tools]
 
@@ -113,29 +121,23 @@ def create_orchestrator_agent(
     if config.tools.tavily_enabled:
         from src.tools.web_search import create_web_search_tool
 
-        tools.append(create_web_search_tool(
-            max_results=config.tools.tavily_max_results,
-            api_key_env=config.tools.tavily_api_key_env,
-        ))
+        tools.append(
+            create_web_search_tool(
+                max_results=config.tools.tavily_max_results,
+                api_key_env=config.tools.tavily_api_key_env,
+            )
+        )
 
-    # Orchestrator 的 HIL 工具（仅 confirm_continue；ask_user 由 Writer 直接调用）
-    hil_tools: list = []
-    if config.hil_confirm:
-        hil_tools.append(confirm_continue_tool)
-    # Writer 调用 ask_user 也需要 checkpointer，只要 hil_clarify 开启图就必须是交互式的
-    interactive = config.hil_clarify or bool(hil_tools)
+    hil_tools: list = [confirm_continue_tool]
+    interactive = True
 
-    # Writer 工具（含 ask_user、context7 tools，若相应配置开启）
     writer_tools = list(tools) + list(context7_tools)
     if config.hil_clarify:
         writer_tools.append(ask_user)
-
-    # Reviewer 工具（含 tavily + context7 tools）
     reviewer_tools = list(tools) + list(context7_tools)
 
     req_path = f"/input/{requirement_filename}"
 
-    # 3. 定义子代理
     writer_subagent = {
         "name": "writer",
         "description": (
@@ -154,35 +156,71 @@ def create_orchestrator_agent(
         "middleware": [LoggingMiddleware(agent_name="writer")],
     }
 
-    reviewer_subagent = {
-        "name": "reviewer",
+    reviewer1_subagent = {
+        "name": "reviewer1",
         "description": (
-            f"基于 {req_path} 中的业务需求审核 /drafts/design.md 中的技术设计文档，"
-            "从需求覆盖性、可落地性、无歧义性、完整性、合理性评估，"
-            "返回 ACCEPT 或 REVISE 结论及详细反馈。"
+            f"基于 {req_path} 中的业务需求审核 /drafts/design.md 中的技术设计文档。"
+            "你必须优先调用 write_file 将结论写入结构化文件（verdict），"
+            "然后再提供详细的文本反馈。从需求覆盖性、可落地性等维度评估。"
         ),
         "system_prompt": build_reviewer_prompt(
             requirement_filename,
             context7_tool_names=context7_tool_names,
+            stage=1,
         ),
         "tools": reviewer_tools,
-        "model": reviewer_model,
+        "model": reviewer1_model,
         "skills": ["/skills/reviewer/"],
-        "middleware": [LoggingMiddleware(agent_name="reviewer")],
+        "middleware": [LoggingMiddleware(agent_name="reviewer1")],
     }
 
+    subagents = [writer_subagent, reviewer1_subagent]
     _log_skills_config("writer", writer_subagent["skills"])
-    _log_skills_config("reviewer", reviewer_subagent["skills"])
+    _log_skills_config("reviewer1", reviewer1_subagent["skills"])
 
-    # 4. 组装 Orchestrator
+    if reviewer2_enabled and reviewer2_model is not None:
+        reviewer2_subagent = {
+            "name": "reviewer2",
+            "description": (
+                f"基于 {req_path} 中的业务需求，从独立视角终审 /drafts/design.md。"
+                "你必须优先调用 write_file 将 ACCEPT 或 REVISE 结论写入结构化文件，"
+                "然后再提供详细的文本反馈。不参考 reviewer1 的意见。"
+            ),
+            "system_prompt": build_reviewer_prompt(
+                requirement_filename,
+                context7_tool_names=context7_tool_names,
+                stage=2,
+            ),
+            "tools": reviewer_tools,
+            "model": reviewer2_model,
+            "skills": ["/skills/reviewer/"],
+            "middleware": [LoggingMiddleware(agent_name="reviewer2")],
+        }
+        subagents.append(reviewer2_subagent)
+        _log_skills_config("reviewer2", reviewer2_subagent["skills"])
+
+    state_path = Path("drafts") / "review-state.json"
+    _ensure_review_state(state_path, reviewer2_enabled=reviewer2_enabled)
+    stage_state = StageStateMiddleware(
+        state_path=str(state_path),
+        reviewer1_max=config.agents["reviewer1"].max_reviewer_iterations,
+        reviewer2_max=config.agents["reviewer2"].max_reviewer_iterations if reviewer2_enabled else 0,
+    )
+
     orch_middleware = LoggingMiddleware(agent_name="orchestrator")
     checkpointer_kwargs = {"checkpointer": MemorySaver()} if interactive else {}
     agent = create_deep_agent(
         model=orchestrator_model,
         tools=hil_tools,
-        system_prompt=build_orchestrator_prompt(config.max_iterations, requirement_filename, hil_confirm=config.hil_confirm),
-        subagents=[writer_subagent, reviewer_subagent],
-        middleware=[orch_middleware],
+        system_prompt=build_orchestrator_prompt(
+            max_iterations=config.max_iterations,
+            requirement_filename=requirement_filename,
+            reviewer2_enabled=reviewer2_enabled,
+            reviewer1_max=config.agents["reviewer1"].max_reviewer_iterations,
+            reviewer2_max=config.agents["reviewer2"].max_reviewer_iterations if reviewer2_enabled else 0,
+        ),
+        subagents=subagents,
+        middleware=[orch_middleware, stage_state],
         backend=FilesystemBackend(root_dir=".", virtual_mode=True),
         name="orchestrator",
         **checkpointer_kwargs,

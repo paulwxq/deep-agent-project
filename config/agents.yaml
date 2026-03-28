@@ -2,11 +2,10 @@
 # 全局配置
 # ========================================
 global:
-  max_iterations: 3
+  max_iterations: 10
   log_level: "INFO"         # 控制台日志级别
   file_log_level: "DEBUG"   # 文件日志级别
   hil_clarify: true      # 开启需求澄清 HIL：Orchestrator 读完需求后可向用户提问（ask_user）
-  hil_confirm: true      # 开启超限确认 HIL：迭代达到 max_iterations 时询问用户是否继续（confirm_continue）
 
 # ========================================
 # Provider 定义：声明可用的模型提供商
@@ -110,9 +109,11 @@ agents:
       temperature: 0.3
       timeout: 600
 
-  reviewer:
+  reviewer1:
+    enabled: true
     provider: "bigmodel"
     model: "glm-5"
+    max_reviewer_iterations: 3
     # GLM-5：
     # - 支持统一 thinking 写法，启用后框架会自动保留并回传 reasoning_content。
     # - 如需强制覆盖回传行为，可加 preserve_reasoning: true/false。
@@ -125,6 +126,18 @@ agents:
         type: "disabled"
       temperature: 0.2
 #      max_tokens: 8192
+      max_retries: 3
+      timeout: 300
+
+  reviewer2:
+    enabled: true
+    provider: "deepseek"
+    model: "deepseek-chat"
+    max_reviewer_iterations: 2
+    params:
+      thinking:
+        type: "disabled"
+      temperature: 0.2
       max_retries: 3
       timeout: 300
 

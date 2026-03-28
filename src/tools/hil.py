@@ -1,7 +1,7 @@
 """HIL (Human-in-the-Loop) 工具定义。
 
-ask_user: 需求澄清 — Orchestrator 发现关键歧义时调用，暂停等待用户回答。
-confirm_continue: 超限确认 — 迭代达到上限时调用，询问用户是否继续。
+ask_user: 需求澄清 — Writer 发现关键歧义时调用，暂停等待用户回答。
+confirm_continue: 超限确认 — 双阶段 reviewer 达到上限或命中全局兜底时调用。
 
 两个工具均使用 LangGraph interrupt() 机制，而非 interrupt_on：
 - interrupt() 在工具内部调用，通过 Command(resume=任意值) 恢复
@@ -31,16 +31,19 @@ def ask_user(questions: str) -> str:
 
 @tool
 def confirm_continue(status: str) -> str:
-    """当 Writer-Reviewer 迭代达到最大轮次时调用，询问用户是否继续。
+    """当双阶段审核流程达到续跑决策点时调用，询问用户是否继续。
 
-    status: 当前迭代情况的简要说明，例如"已完成 3 轮迭代，Reviewer 仍返回 REVISE"。
-    用户回答 yes 则继续迭代，回答 no 则以当前版本作为最终输出。
+    status: 当前阶段/全局超限情况的简要说明，必须包含当前 reviewer 与核心问题摘要。
     """
     decision = interrupt({"status": status})
     normalized = str(decision).strip().lower()
     if normalized in ("yes", "y", "继续", "是"):
         return (
+            "USER_DECISION: YES\n"
             "用户选择继续迭代。请从第 1 轮重新开始计数（进入续跑阶段），"
             "再给约一轮完整配额，Reviewer 提前 ACCEPT 则提前退出。"
         )
-    return "用户选择结束迭代，以当前版本作为最终输出，请进入步骤 6。"
+    return (
+        "USER_DECISION: NO\n"
+        "用户选择结束迭代，以当前版本作为最终输出，请进入步骤 6。"
+    )

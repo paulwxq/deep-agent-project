@@ -19,6 +19,7 @@ dependencies = [
     "langchain-mcp-adapters>=0.2.2",
     "mcp>=1.26.0",
     "httpx[socks]>=0.28.1",
+    "langchain-openrouter>=0.2.0",
 ]
 
 [dependency-groups]

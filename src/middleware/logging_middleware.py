@@ -139,7 +139,7 @@ class LoggingMiddleware(AgentMiddleware):
         result_text = _extract_task_result_text(result)
 
         # Reviewer 结果使用专用前缀，其他子代理使用通用前缀
-        if target == "reviewer":
+        if target in ("reviewer", "reviewer1", "reviewer2"):
             logger.info(
                 "🔍 Reviewer 反馈: %s",
                 result_text[:MAX_TASK_RESULT_LOG],

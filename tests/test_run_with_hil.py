@@ -350,15 +350,20 @@ class TestExecutionRouting:
     """
 
     @staticmethod
-    def _make_config(hil_clarify: bool, hil_confirm: bool):
+    def _make_config(hil_clarify: bool):
         from src.config_loader import AppConfig, AgentModelConfig, ProviderConfig, ToolsConfig
         p = ProviderConfig(type="dashscope", api_key_env="K")
         a = AgentModelConfig(provider="p", model="m")
         return AppConfig(
             max_iterations=3, log_level="INFO", file_log_level="DEBUG",
-            hil_clarify=hil_clarify, hil_confirm=hil_confirm,
+            hil_clarify=hil_clarify,
             providers={"p": p},
-            agents={"orchestrator": a, "writer": a, "reviewer": a},
+            agents={
+                "orchestrator": a,
+                "writer": a,
+                "reviewer1": a,
+                "reviewer2": AgentModelConfig(enabled=False, provider="p", model="m"),
+            },
             tools=ToolsConfig(),
         )
 
@@ -406,26 +411,25 @@ class TestExecutionRouting:
         assert callable(_run_with_hil_async)
 
     def test_interactive_flag_routes_to_run_with_hil_async(self, tmp_path, monkeypatch):
-        """-i 标志 → main() 将两个 HIL flag 置 True → 调用 _run_with_hil_async，不调用 ainvoke。"""
-        # config 默认关闭，-i 会在运行时覆盖
-        cfg = self._make_config(hil_clarify=False, hil_confirm=False)
+        """-i 标志保留兼容语义；当前架构无论如何都走 _run_with_hil_async。"""
+        cfg = self._make_config(hil_clarify=False)
         mock_hil_async, mock_agent = self._call_main(tmp_path, monkeypatch, cfg, extra_argv=["-i"])
         mock_hil_async.assert_called_once()
         mock_agent.ainvoke.assert_not_called()
 
     def test_yaml_hil_clarify_routes_to_run_with_hil_async(self, tmp_path, monkeypatch):
-        """YAML 设置 hil_clarify=True（不加 -i）→ main() 路由到 _run_with_hil_async。"""
-        cfg = self._make_config(hil_clarify=True, hil_confirm=False)
+        """hil_clarify=True 时同样走 _run_with_hil_async。"""
+        cfg = self._make_config(hil_clarify=True)
         mock_hil_async, mock_agent = self._call_main(tmp_path, monkeypatch, cfg)
         mock_hil_async.assert_called_once()
         mock_agent.ainvoke.assert_not_called()
 
-    def test_non_interactive_routes_to_ainvoke(self, tmp_path, monkeypatch):
-        """两个 HIL flag 均 False，不加 -i → main() 调用 agent.ainvoke，不调用 _run_with_hil_async。"""
-        cfg = self._make_config(hil_clarify=False, hil_confirm=False)
+    def test_current_architecture_always_routes_to_run_with_hil_async(self, tmp_path, monkeypatch):
+        """双阶段审核架构固定交互式；即便 hil_clarify=False，也应走 _run_with_hil_async。"""
+        cfg = self._make_config(hil_clarify=False)
         mock_hil_async, mock_agent = self._call_main(tmp_path, monkeypatch, cfg)
-        mock_hil_async.assert_not_called()
-        mock_agent.ainvoke.assert_called_once()
+        mock_hil_async.assert_called_once()
+        mock_agent.ainvoke.assert_not_called()
 
     def test_main_logs_exception_and_exits_when_agent_execution_fails(self, tmp_path, monkeypatch):
         import sys
@@ -437,12 +441,12 @@ class TestExecutionRouting:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(sys, "argv", ["main.py", "-f", "req.txt"])
 
-        cfg = self._make_config(hil_clarify=False, hil_confirm=False)
+        cfg = self._make_config(hil_clarify=False)
         mock_logger = MagicMock()
         mock_agent = MagicMock()
-        mock_agent.ainvoke = AsyncMock(side_effect=RuntimeError("request timeout"))
         mock_middleware = MagicMock()
         mock_middleware.task_counts = {}
+        mock_hil = AsyncMock(side_effect=RuntimeError("request timeout"))
 
         with (
             patch("src.logger.setup_logger", return_value=mock_logger),
@@ -453,7 +457,7 @@ class TestExecutionRouting:
             patch("main.os.chdir"),
             patch("main.load_dotenv"),
             patch("main.shutil"),
-            patch.object(main_module, "_run_with_hil_async", AsyncMock()),
+            patch.object(main_module, "_run_with_hil_async", mock_hil),
         ):
             with patch("sys.exit", side_effect=SystemExit(1)) as mock_exit:
                 try:
