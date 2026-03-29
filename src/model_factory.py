@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
 logger = logging.getLogger("deep_agent_project")
 
 from src.config_loader import AgentModelConfig, ProviderConfig
+from src.openrouter_compat import (
+    OPENROUTER_DEFAULT_BASE_URL,
+    ReasoningCompatibleChatOpenRouter,
+)
 from src.reasoning_compat import (
     ReasoningCompatibleChatDeepSeek,
     ReasoningCompatibleChatOpenAI,
@@ -49,7 +54,7 @@ def create_model(
         case "deepseek":
             return _create_deepseek(provider_config, agent_config, api_key, params)
         case "openrouter":
-            return _create_openrouter(agent_config, api_key, params)
+            return _create_openrouter(provider_config, agent_config, api_key, params)
         case _:
             raise ValueError(f"不支持的 Provider 类型: {provider_config.type}")
 
@@ -220,20 +225,84 @@ def _create_deepseek(
     return ReasoningCompatibleChatDeepSeek(**kwargs)
 
 
+def _resolve_base_url(provider_config: ProviderConfig, default: str) -> str:
+    """解析 provider base_url。优先级：base_url_env > base_url > default。"""
+    if provider_config.base_url_env:
+        env_value = os.environ.get(provider_config.base_url_env)
+        if env_value:
+            return env_value
+    if provider_config.base_url:
+        return provider_config.base_url
+    return default
+
+
 def _create_openrouter(
+    provider_config: ProviderConfig,
     agent_config: AgentModelConfig,
     api_key: str,
     params: dict,
 ) -> BaseChatModel:
-    from langchain.chat_models import init_chat_model
+    use_responses_api = params.get("use_responses_api")
+    # 注：use_responses_api=True 在配置加载阶段已由 config_loader 提前拦截（ConfigError）。
+    # 此处保留兜底检查，防止程序化绕过 load_config 直接调用时静默失败。
+    if use_responses_api is True:
+        raise NotImplementedError(
+            "OpenRouter Responses API 当前版本不支持。"
+            "请将 use_responses_api 设置为 false 或删除该字段。"
+        )
+    if use_responses_api is False:
+        logger.debug(
+            "模型构造 [openrouter]: use_responses_api=false，固定走 Chat Completions 模式",
+            extra={"agent_name": "system"},
+        )
 
-    model_name = f"openrouter:{agent_config.model}"
-    kwargs: dict = {}
+    base_url = _resolve_base_url(provider_config, OPENROUTER_DEFAULT_BASE_URL)
+
+    # 整理 model_kwargs：extra_body 作为项目侧扩展参数容器，verbosity 并入其中
+    model_kwargs: dict[str, Any] = dict(params.get("extra_body", {}))
+    if "verbosity" in params:
+        model_kwargs["verbosity"] = params["verbosity"]
+
+    # 禁止旧 SDK 风格的请求头字段
+    if "x_title" in model_kwargs or "http_referer" in model_kwargs:
+        raise ValueError(
+            "请使用 app_title / app_url 代替旧式 x_title / http_referer 字段。"
+        )
+
+    kwargs: dict[str, Any] = {
+        "model": agent_config.model,
+        "api_key": api_key,
+        "base_url": base_url,
+        "streaming": False,
+    }
     if "temperature" in params:
         kwargs["temperature"] = params["temperature"]
     if "max_tokens" in params:
         kwargs["max_tokens"] = params["max_tokens"]
+    if "max_retries" in params:
+        kwargs["max_retries"] = params["max_retries"]
+    if "timeout" in params:
+        kwargs["timeout"] = params["timeout"]
+    if "reasoning" in params:
+        kwargs["reasoning"] = params["reasoning"]
+    if "app_title" in params:
+        kwargs["app_title"] = params["app_title"]
+    if "app_url" in params:
+        kwargs["app_url"] = params["app_url"]
+    if "openrouter_provider" in params:
+        kwargs["openrouter_provider"] = params["openrouter_provider"]
+    # parallel_tool_calls 优先在 bind_tools 传递，此处存入字段供包装类使用
+    if "parallel_tool_calls" in params:
+        kwargs["parallel_tool_calls"] = params["parallel_tool_calls"]
+    if model_kwargs:
+        kwargs["model_kwargs"] = model_kwargs
+    kwargs["preserve_reasoning_details"] = params.get("preserve_reasoning_details", False)
 
-    os.environ["OPENROUTER_API_KEY"] = api_key
-
-    return init_chat_model(model_name, **kwargs)
+    safe = {k: v for k, v in kwargs.items() if k != "api_key"}
+    logger.debug(
+        "模型构造 [openrouter/%s]: %s",
+        agent_config.model,
+        safe,
+        extra={"agent_name": "system"},
+    )
+    return ReasoningCompatibleChatOpenRouter(**kwargs)

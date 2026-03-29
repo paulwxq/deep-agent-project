@@ -14,6 +14,7 @@ from src.reasoning_compat import (
     ReasoningCompatibleChatDeepSeek,
     ReasoningCompatibleChatOpenAI,
     extract_reasoning_text,
+    sanitize_tool_messages_payload,
 )
 
 
@@ -209,6 +210,117 @@ def test_reasoning_chatopenai_keeps_complete_tool_call_history(monkeypatch):
     sanitized = model._sanitize_tool_messages(payload)
 
     assert sanitized["messages"] == payload["messages"]
+
+
+class TestSanitizeToolMessagesPayload:
+    """直接测试 sanitize_tool_messages_payload 独立 helper。"""
+
+    def _incomplete_payload(self) -> dict:
+        return {
+            "messages": [
+                {"role": "user", "content": "start"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "assistant", "content": "继续"},
+            ]
+        }
+
+    def _complete_payload(self) -> dict:
+        return {
+            "messages": [
+                {"role": "user", "content": "start"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "file content"},
+                {"role": "assistant", "content": "done"},
+            ]
+        }
+
+    def test_drops_incomplete_tool_call(self):
+        payload = self._incomplete_payload()
+        result = sanitize_tool_messages_payload(payload, provider="test-provider")
+        roles = [m["role"] for m in result["messages"]]
+        assert roles == ["user", "assistant"]
+        assert result["messages"][1]["content"] == "继续"
+
+    def test_keeps_complete_tool_call(self):
+        payload = self._complete_payload()
+        result = sanitize_tool_messages_payload(payload, provider="test-provider")
+        assert result["messages"] == self._complete_payload()["messages"]
+
+    def test_drops_orphan_tool_message(self):
+        payload = {
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "tool", "tool_call_id": "orphan_id", "content": "result"},
+                {"role": "assistant", "content": "reply"},
+            ]
+        }
+        result = sanitize_tool_messages_payload(payload, provider="test-provider")
+        roles = [m["role"] for m in result["messages"]]
+        assert roles == ["user", "assistant"]
+
+    def test_no_op_when_messages_key_absent(self):
+        payload = {"model": "gpt-4"}
+        result = sanitize_tool_messages_payload(payload, provider="test-provider")
+        assert result == {"model": "gpt-4"}
+
+    def test_default_provider_unknown(self):
+        payload = self._incomplete_payload()
+        # 不传 provider 时不应抛错
+        result = sanitize_tool_messages_payload(payload)
+        assert len(result["messages"]) == 2
+
+    def test_openrouter_mixin_calls_helper_with_openrouter_provider(self, monkeypatch):
+        """ReasoningCompatibleChatOpenRouter._sanitize_tool_messages 传入 provider='openrouter'。"""
+        from unittest.mock import patch as _patch
+        from src.openrouter_compat import ReasoningCompatibleChatOpenRouter
+
+        called_with: list = []
+
+        def fake_sanitize(payload, provider="unknown"):
+            called_with.append(provider)
+            return payload
+
+        payload = self._complete_payload()
+        with _patch("src.openrouter_compat.sanitize_tool_messages_payload", side_effect=fake_sanitize):
+            monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+            model = ReasoningCompatibleChatOpenRouter.__new__(ReasoningCompatibleChatOpenRouter)
+            model._sanitize_tool_messages(payload)
+
+        assert called_with == ["openrouter"]
+
+    def test_reasoning_passthrough_mixin_calls_helper_with_provider_name(self, monkeypatch):
+        """_ReasoningPassthroughMixin._sanitize_tool_messages 传入 self.provider_name。"""
+        from unittest.mock import patch as _patch
+
+        called_with: list = []
+
+        def fake_sanitize(payload, provider="unknown"):
+            called_with.append(provider)
+            return payload
+
+        model = ReasoningCompatibleChatOpenAI(
+            model="glm-5",
+            api_key="sk-test",
+            base_url="https://open.bigmodel.cn/api/paas/v4/",
+            provider_name="bigmodel",
+        )
+        payload = self._complete_payload()
+        with _patch("src.reasoning_compat.sanitize_tool_messages_payload", side_effect=fake_sanitize):
+            model._sanitize_tool_messages(payload)
+
+        assert called_with == ["bigmodel"]
 
 
 def test_logging_middleware_logs_reasoning_blocks(caplog):

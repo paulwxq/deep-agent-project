@@ -1,0 +1,9 @@
+id: "sw_hld"
+name: "系统概要设计说明书"
+target_audience: "架构师、后端研发、测试负责人"
+template_path: "skills/writer/templates/standard_hld.md"
+focus_points:
+  - "逻辑架构：三层解耦、核心组件职责、交互流程"
+  - "数据架构：数据库设计、核心表结构、缓存策略"
+  - "系统边界：外部系统依赖、API 定义、错误降级方案"
+  - "部署架构：网络拓扑、伸缩性设计、安全性约束"

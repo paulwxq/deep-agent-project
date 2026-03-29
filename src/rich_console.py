@@ -47,8 +47,11 @@ def print_task_result(source: str, target: str, message: str) -> None:
     console.print(Panel(_truncate(message), title=title, border_style="green"))
 
 
-def print_reviewer_feedback(message: str) -> None:
+def print_reviewer_feedback(message: str, reviewer_name: str = "Reviewer") -> None:
     """🔍 Reviewer 审核结论 — 绿色(ACCEPT) / 黄色(REVISE)。"""
+    # 格式化显示名称，如 reviewer1 -> Reviewer1, reviewer -> Reviewer
+    display_name = reviewer_name.capitalize()
+
     first_line = message.strip().splitlines()[0].upper() if message.strip() else ""
     if "ACCEPT" in first_line:
         style, icon = "bright_green", "✅"
@@ -58,7 +61,7 @@ def print_reviewer_feedback(message: str) -> None:
         style, icon = "cyan", "🔍"
     console.print(Panel(
         _truncate(message),
-        title=f"[bold]{icon} Reviewer 反馈[/bold]  [dim]{_ts()}[/dim]",
+        title=f"[bold]{icon} {display_name} 反馈[/bold]  [dim]{_ts()}[/dim]",
         border_style=style,
     ))
 

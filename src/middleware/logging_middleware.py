@@ -145,7 +145,7 @@ class LoggingMiddleware(AgentMiddleware):
                 result_text[:MAX_TASK_RESULT_LOG],
                 extra={"agent_name": self._agent_name},
             )
-            rich_console.print_reviewer_feedback(result_text)
+            rich_console.print_reviewer_feedback(result_text, reviewer_name=target)
         else:
             logger.info(
                 "📥 [%s → %s] 返回结果: %s",

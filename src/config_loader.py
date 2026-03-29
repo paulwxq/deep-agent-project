@@ -179,6 +179,9 @@ def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
         ):
             raise ConfigError("reviewer2 启用时，必须与 reviewer1 使用不同的 provider+model 组合")
 
+    _validate_openrouter_all_or_nothing(agents)
+    _validate_openrouter_agent_params(agents)
+
     raw_tools = raw.get("tools", {})
     if not isinstance(raw_tools, dict):
         raw_tools = {}
@@ -204,6 +207,55 @@ def load_config(config_path: str = "config/agents.yaml") -> AppConfig:
         agents=agents,
         tools=tools,
     )
+
+
+def _validate_openrouter_all_or_nothing(agents: dict[str, AgentModelConfig]) -> None:
+    """校验 OpenRouter 不与其他 provider 混用。
+
+    只要任一启用中的 agent 使用 openrouter，则所有启用中的 agent 都必须使用 openrouter。
+    """
+    enabled_agents = {name: cfg for name, cfg in agents.items() if cfg.enabled}
+    openrouter_agents = {name for name, cfg in enabled_agents.items() if cfg.provider == "openrouter"}
+
+    if openrouter_agents and len(openrouter_agents) != len(enabled_agents):
+        non_openrouter = sorted(set(enabled_agents) - openrouter_agents)
+        raise ConfigError(
+            f"检测到 OpenRouter 与其他 provider 混用。当前项目要求：只要任一启用中的 Agent 使用"
+            f" openrouter，则所有启用中的 Agent 都必须使用 openrouter。"
+            f"以下 Agent 未使用 openrouter：{non_openrouter}"
+        )
+
+
+def _validate_openrouter_agent_params(agents: dict[str, AgentModelConfig]) -> None:
+    """校验启用中的 OpenRouter agent 参数合法性。
+
+    在配置加载阶段提前拦截已知不支持的参数组合，让用户在启动时即可发现问题。
+    """
+    for name, cfg in agents.items():
+        if not cfg.enabled or cfg.provider != "openrouter":
+            continue
+
+        params = cfg.params
+
+        if params.get("use_responses_api") is True:
+            raise ConfigError(
+                f"Agent '{name}' 配置了 use_responses_api: true，"
+                f"但当前版本不支持 OpenRouter Responses API。"
+                f"请将该字段设置为 false 或删除。"
+            )
+
+        extra_body = params.get("extra_body", {})
+        if isinstance(extra_body, dict):
+            if "x_title" in extra_body:
+                raise ConfigError(
+                    f"Agent '{name}' 的 extra_body 含有废弃字段 x_title，"
+                    f"请改用 app_title。"
+                )
+            if "http_referer" in extra_body:
+                raise ConfigError(
+                    f"Agent '{name}' 的 extra_body 含有废弃字段 http_referer，"
+                    f"请改用 app_url。"
+                )
 
 
 def validate_env_vars(config: AppConfig) -> list[str]:

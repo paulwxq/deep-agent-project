@@ -45,7 +45,11 @@
       "Bash(.venv-wsl/bin/python -m pytest tests/ -x -q)",
       "Bash(python -m pytest tests/test_stage_state.py -q)",
       "Bash(python -m pytest tests/test_stage_state.py -q -k \"not stage_limit and not verdict_parse_error\")",
-      "WebSearch"
+      "WebSearch",
+      "Bash(uv run:*)",
+      "Bash(.venv-wsl/bin/python -m pytest tests/test_config_loader.py::TestOpenRouterAgentParamValidation -v)",
+      "Bash(.venv-wsl/bin/python -m pytest tests/ --ignore=tests/test_config_loader.py::TestLoadConfigHappyPath --ignore=tests/test_stage_state.py -q)",
+      "Bash(cut -c1-22 echo \"R1 2轮 完成\\(REVISE\\):\")"
     ]
   }
 }

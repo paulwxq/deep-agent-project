@@ -217,3 +217,198 @@ class TestValidateEnvVars:
             },
         )
         assert "MINIMAX_API_KEY" in validate_env_vars(cfg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OpenRouter 参数早期校验
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _openrouter_yaml(tmp_path: Path, agent_params: str = "") -> str:
+    """生成只含 OpenRouter 四模型的最小合法 YAML，可在 agent params 处插入额外字段。"""
+    return write_yaml(
+        tmp_path,
+        f"""
+        global:
+          hil_clarify: false
+        providers:
+          openrouter:
+            type: openrouter
+            api_key_env: OPENROUTER_API_KEY
+        agents:
+          orchestrator:
+            provider: openrouter
+            model: anthropic/claude-sonnet-4.6
+            params:
+              temperature: 0.2
+              {agent_params}
+          writer:
+            provider: openrouter
+            model: google/gemini-3.1-pro-preview
+            params:
+              temperature: 0.2
+          reviewer1:
+            enabled: true
+            provider: openrouter
+            model: anthropic/claude-sonnet-4.6
+            params:
+              temperature: 0.2
+          reviewer2:
+            enabled: true
+            provider: openrouter
+            model: openai/gpt-5.3-codex
+            params:
+              temperature: 0.2
+        """,
+    )
+
+
+class TestOpenRouterAgentParamValidation:
+    def test_use_responses_api_true_raises_config_error(self, tmp_path: Path):
+        path = _openrouter_yaml(tmp_path, "use_responses_api: true")
+        with pytest.raises(ConfigError, match="use_responses_api"):
+            load_config(path)
+
+    def test_use_responses_api_false_does_not_raise(self, tmp_path: Path):
+        path = _openrouter_yaml(tmp_path, "use_responses_api: false")
+        cfg = load_config(path)
+        assert cfg.agents["orchestrator"].params["use_responses_api"] is False
+
+    def test_use_responses_api_absent_does_not_raise(self, tmp_path: Path):
+        path = _openrouter_yaml(tmp_path)
+        cfg = load_config(path)
+        assert "use_responses_api" not in cfg.agents["orchestrator"].params
+
+    def test_x_title_in_extra_body_raises_config_error(self, tmp_path: Path):
+        path = write_yaml(
+            tmp_path,
+            """
+            global:
+              hil_clarify: false
+            providers:
+              openrouter:
+                type: openrouter
+                api_key_env: OPENROUTER_API_KEY
+            agents:
+              orchestrator:
+                provider: openrouter
+                model: anthropic/claude-sonnet-4.6
+                params:
+                  extra_body:
+                    x_title: "My App"
+              writer:
+                provider: openrouter
+                model: google/gemini-3.1-pro-preview
+                params: {}
+              reviewer1:
+                enabled: true
+                provider: openrouter
+                model: anthropic/claude-sonnet-4.6
+                params: {}
+            """,
+        )
+        with pytest.raises(ConfigError, match="x_title"):
+            load_config(path)
+
+    def test_http_referer_in_extra_body_raises_config_error(self, tmp_path: Path):
+        path = write_yaml(
+            tmp_path,
+            """
+            global:
+              hil_clarify: false
+            providers:
+              openrouter:
+                type: openrouter
+                api_key_env: OPENROUTER_API_KEY
+            agents:
+              orchestrator:
+                provider: openrouter
+                model: anthropic/claude-sonnet-4.6
+                params:
+                  extra_body:
+                    http_referer: "https://example.com"
+              writer:
+                provider: openrouter
+                model: google/gemini-3.1-pro-preview
+                params: {}
+              reviewer1:
+                enabled: true
+                provider: openrouter
+                model: anthropic/claude-sonnet-4.6
+                params: {}
+            """,
+        )
+        with pytest.raises(ConfigError, match="http_referer"):
+            load_config(path)
+
+    def test_disabled_openrouter_agent_use_responses_api_true_not_checked(self, tmp_path: Path):
+        """禁用中的 agent 不参与校验。"""
+        path = write_yaml(
+            tmp_path,
+            """
+            global:
+              hil_clarify: false
+            providers:
+              openrouter:
+                type: openrouter
+                api_key_env: OPENROUTER_API_KEY
+            agents:
+              orchestrator:
+                provider: openrouter
+                model: anthropic/claude-sonnet-4.6
+                params: {}
+              writer:
+                provider: openrouter
+                model: google/gemini-3.1-pro-preview
+                params: {}
+              reviewer1:
+                enabled: true
+                provider: openrouter
+                model: anthropic/claude-sonnet-4.6
+                params: {}
+              reviewer2:
+                enabled: false
+                provider: openrouter
+                model: openai/gpt-5.3-codex
+                params:
+                  use_responses_api: true
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.agents["reviewer2"].enabled is False
+
+    def test_non_openrouter_agent_use_responses_api_true_not_checked(self, tmp_path: Path):
+        """非 OpenRouter agent 不参与 OpenRouter 参数校验。"""
+        path = write_yaml(
+            tmp_path,
+            """
+            global:
+              hil_clarify: false
+            providers:
+              deepseek:
+                type: deepseek
+                api_key_env: DEEPSEEK_API_KEY
+            agents:
+              orchestrator:
+                provider: deepseek
+                model: deepseek-chat
+                params:
+                  use_responses_api: true
+              writer:
+                provider: deepseek
+                model: deepseek-chat
+                params: {}
+              reviewer1:
+                enabled: true
+                provider: deepseek
+                model: deepseek-chat
+                params: {}
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.agents["orchestrator"].params["use_responses_api"] is True
+
+    def test_error_message_includes_agent_name(self, tmp_path: Path):
+        """报错信息应包含出问题的 agent 名称，便于定位。"""
+        path = _openrouter_yaml(tmp_path, "use_responses_api: true")
+        with pytest.raises(ConfigError, match="orchestrator"):
+            load_config(path)
